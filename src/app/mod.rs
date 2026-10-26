@@ -6,6 +6,7 @@ mod settings;
 mod choose;
 mod clipboard;
 mod columns;
+mod file_icons;
 mod filter;
 mod focus;
 pub mod drop;
@@ -328,6 +329,8 @@ pub struct App {
     key_tip_timer: slint::Timer,
     key_tip: std::cell::Cell<Option<usize>>,
     pending_thumbs: RefCell<HashSet<(String, u32)>>,
+    pending_icons: RefCell<HashSet<String>>,
+    known_icons: RefCell<HashMap<String, (u64, u32)>>,
     search_timer: slint::Timer,
     search_pulse_at:std::cell::Cell<Option<Instant>>,
     search_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -508,6 +511,8 @@ impl App {
             key_tip_timer: slint::Timer::default(),
             key_tip: std::cell::Cell::new(None),
             pending_thumbs: RefCell::new(HashSet::new()),
+            pending_icons: RefCell::new(HashSet::new()),
+            known_icons: RefCell::new(HashMap::new()),
             search_timer: slint::Timer::default(),
             search_pulse_at:std::cell::Cell::new(None),
             search_generation:std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -983,7 +988,6 @@ impl App {
         self.list(path, initial);
     }
 
-    /// Lists a folder (and its address bar chain) on a worker thread.
     fn list(self: &Rc<Self>, path: String, with_crumbs: bool) {
         let request = {
             let mut st = self.state.borrow_mut();
@@ -992,6 +996,7 @@ impl App {
         };
         self.search_generation.store(request,std::sync::atomic::Ordering::Release);
         self.pending_fields.borrow_mut().clear();
+        self.pending_icons.borrow_mut().clear();
         if ids::is_settings(&path) { self.list_settings(); return; }
         if ids::is_search(&path) {
             self.start_search_stream(request,path,with_crumbs);
@@ -1077,8 +1082,6 @@ impl App {
                 images.insert(*icon, 16, rgba);
             }
         }
-        // The folder itself is gone (deleted, renamed, drive removed): Explorer moves up to
-        // the nearest folder that still exists.
         if result.is_err() && !ids::is_virtual(&path) && !std::path::Path::new(&path).exists() {
             if request == self.state.borrow().request {
                 let mut up = std::path::Path::new(&path).parent();
@@ -1097,19 +1100,17 @@ impl App {
             }
             st.loaded = true;
             st.fields.clear();
-            // Changed from another window (the shell notifies Explorer's, not ours).
             let settings = listing::settings();
             let old_click=st.click_settings;
             let refresh_font=st.click_view_path!=st.path || old_click.single_click!=settings.single_click;
             st.click_settings = settings;
-            // Explorer keeps IconUnderline in the current view's font until navigation;
-            // changing one/two-click activation itself refreshes it immediately.
             if !refresh_font { st.click_settings.underline_hover_only=old_click.underline_hover_only; }
             st.click_view_path=st.path.clone();
             st.check_boxes = settings.check_boxes;
             st.compact = settings.compact;
             match result {
-                Ok(entries) => {
+                Ok(mut entries) => {
+                    self.apply_known_icons(&mut entries);
                     st.entries = entries;
                     st.error.clear();
                 }
@@ -1118,7 +1119,6 @@ impl App {
                     st.error = e;
                 }
             }
-            // Drop selection entries that vanished.
             let alive: HashSet<&str> = st.entries.iter().map(|e| e.path.as_str()).collect();
             let keep: HashSet<String> = st.selected.iter().filter(|p| alive.contains(p.as_str())).cloned().collect();
             st.selected = keep;
@@ -1126,14 +1126,11 @@ impl App {
                 st.crumbs = crumbs;
                 let cur = st.current;
                 if let Some(last) = st.crumbs.last().cloned() {
-                    // Search results: "query - Resultados da Pesquisa em <folder>".
                     st.tabs[cur].title = match ids::search_parts(&st.path) {
                         Some((_, query)) => format!("{} - {}", query.trim(), last.name),
-                        // Folder Options' "full path in the title bar" (file system folders).
                         None if !ids::is_virtual(&st.path) && listing::settings().full_path => st.path.clone(),
                         None => last.name.clone(),
                     };
-                    // A search's tab shows the system's magnifier.
                     st.tabs[cur].icon = if ids::is_search(&st.path) { crate::shell::icons::find_icon() } else { last.icon };
                 }
             }
@@ -1148,7 +1145,6 @@ impl App {
             }
             if st.after_load.is_none() {
                 if let Some(from) = st.came_from.take() {
-                    // The item we came from, or (several levels up) the one leading back to it.
                     let lower = from.to_lowercase();
                     let leads_back = |path: &str| {
                         let p = path.to_lowercase();
@@ -1182,9 +1178,8 @@ impl App {
         self.rebuild_order();
         self.load_sort_texts();
         self.sync_all();
+        self.resolve_icons();
         let follow=navigated && self.state.borrow().nav_options.expand;
-        // The saved mode may replace the initially focused (now hidden) Details
-        // scope with icons/tiles. Keep keyboard focus on the visible list.
         let focus_ui=self.ui();let focus_shell=focus_ui.global::<Shell>();
         if navigated&&focus_shell.get_focus_zone()=="list"&&!focus_shell.get_menu_open(){focus_ui.invoke_focus_list();}
         if follow {self.nav_follow_current();}

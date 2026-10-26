@@ -1,28 +1,26 @@
-//! System image list icons and shell thumbnails as straight-alpha RGBA buffers. An `icon`
-//! packs the system image list index in the low 24 bits and the overlay index (e.g. the
-//! shortcut arrow) in the high 8.
-
 use windows::core::{Interface, PCWSTR, PWSTR};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
 };
-use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES};
 use windows::Win32::UI::Controls::{IImageList, ILD_TRANSPARENT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    IShellFolder, IShellIcon, SHGetFileInfoW, SHGetImageList, SHMapPIDLToSystemImageListIndex,
-    SHFILEINFOW, SHGFI_ICON, SHGFI_OVERLAYINDEX, SHGFI_PIDL, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
-    SHIL_EXTRALARGE, SHIL_JUMBO, SHIL_LARGE, SHIL_SMALL,
+    IExtractIconW, IShellFolder, IShellIcon, SHGetFileInfoW, SHGetImageList,
+    SHMapPIDLToSystemImageListIndex, SHFILEINFOW, SHGFI_ICON, SHGFI_OVERLAYINDEX, SHGFI_PIDL,
+    SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_USEFILEATTRIBUTES, SHIL_EXTRALARGE, SHIL_JUMBO,
+    SHIL_LARGE, SHIL_SMALL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
 use super::com_init;
 
 const GIL_FORSHELL: u32 = 0x0002;
+const GIL_ASYNC: u32 = 0x0020;
+const GIL_PERINSTANCE: u32 = 0x0002;
 
-/// Icon of a child item, using the folder's fast `IShellIcon` path when it can answer
-/// without extracting per-item icons. Shortcuts also carry their overlay.
 pub unsafe fn icon_of(
     folder: &IShellFolder,
     child: *const ITEMIDLIST,
@@ -43,6 +41,46 @@ pub unsafe fn icon_of(
     } else {
         0
     }
+}
+
+pub unsafe fn has_own_icon(folder: &IShellFolder, child: *const ITEMIDLIST) -> bool {
+    let Ok(extract) = folder.GetUIObjectOf::<IExtractIconW>(HWND::default(), &[child], None) else {
+        return false;
+    };
+    let mut file = [0u16; 260];
+    let (mut index, mut flags) = (0i32, 0u32);
+    extract
+        .GetIconLocation(GIL_FORSHELL | GIL_ASYNC, &mut file, &mut index, &mut flags)
+        .is_ok()
+        && flags & GIL_PERINSTANCE != 0
+}
+
+pub fn generic_icon(path: &str) -> u32 {
+    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+    let wide = super::wide(&format!(".{ext}"));
+    let mut info = SHFILEINFOW::default();
+    let res = unsafe {
+        SHGetFileInfoW(
+            PCWSTR(wide.as_ptr()),
+            FILE_ATTRIBUTE_NORMAL,
+            Some(&mut info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX,
+        )
+    };
+    if res == 0 {
+        0
+    } else {
+        info.iIcon as u32 & 0x00FF_FFFF
+    }
+}
+
+pub fn file_icon(path: &str) -> u32 {
+    com_init();
+    let Ok(pidl) = super::Pidl::parse(path) else { return 0 };
+    let Some(parent) = pidl.parent() else { return 0 };
+    let Ok(folder) = parent.folder() else { return 0 };
+    unsafe { icon_of(&folder, pidl.last_id(), pidl.ptr(), false) }
 }
 
 pub unsafe fn icon_of_pidl(abs: *const ITEMIDLIST) -> u32 {

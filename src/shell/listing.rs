@@ -17,6 +17,10 @@ use windows::Win32::UI::Shell::{
 
 use super::{com_init, display_name, icons, take_pwstr, Pidl};
 
+use std::time::{Duration, Instant};
+
+const SYNC_ICON_BUDGET: Duration = Duration::from_millis(150);
+
 #[derive(Clone, Debug)]
 pub struct ShellEntry {
     pub name: String,
@@ -30,22 +34,17 @@ pub struct ShellEntry {
     pub created: u64,
     pub type_name: String,
     pub icon: u32,
+    pub icon_pending: bool,
     pub file_attributes: u32,
     pub library_origin: Option<super::library::Origin>,
     pub photo: Option<super::gallery::Photo>,
     pub total: u64,
     pub free: u64,
-    /// What the item allows (SFGAO_CANMOVE, CANCOPY, CANRENAME, CANDELETE): a drive can be
-    /// copied and renamed, not cut or deleted.
     pub can_move: bool,
     pub can_copy: bool,
     pub can_rename: bool,
     pub can_delete: bool,
-    /// The item's ID in a folder outside the file system (Network, the Recycle Bin), whose
-    /// values only come through items it makes from it (Network's Categoria); else empty.
     pub child: Vec<u8>,
-    /// An absolute shell identity for items whose parsing path cannot be reopened
-    /// (for example search results inside a CAB). Owned bytes can cross worker STAs.
     pub absolute: Vec<u8>,
 }
 
@@ -268,8 +267,6 @@ pub fn list_pidl(parent: &Pidl) -> Result<Vec<ShellEntry>, String> {
     Ok(entries)
 }
 
-/// Enumerate live search results without waiting for the crawl to finish. Returning
-/// false stops between native Next calls; no COM object escapes this worker's STA.
 pub fn for_each_pidl(
     parent: &Pidl,
     mut emit: impl FnMut(ShellEntry) -> bool,
@@ -307,6 +304,7 @@ pub fn for_each_pidl(
                 .is_empty()
             || super::archive::root(&parent_path).is_some();
 
+        let mut icon_time = Duration::ZERO;
         loop {
             let mut child: [*mut ITEMIDLIST; 1] = [std::ptr::null_mut()];
             let mut fetched = 0u32;
@@ -364,7 +362,18 @@ pub fn for_each_pidl(
                 None => (0, 0, 0, String::new(), 0, 0),
             };
 
-            let icon = icons::icon_of(&folder, child, abs, is_link);
+            let deferred = icon_time >= SYNC_ICON_BUDGET
+                && !is_link
+                && has(SFGAO_FILESYSTEM.0)
+                && icons::has_own_icon(&folder, child);
+            let (icon, icon_pending) = if deferred {
+                (icons::generic_icon(&path), true)
+            } else {
+                let started = Instant::now();
+                let icon = icons::icon_of(&folder, child, abs, is_link);
+                icon_time += started.elapsed();
+                (icon, false)
+            };
             let file_attributes = item
                 .as_ref()
                 .and_then(|it| {
@@ -387,6 +396,7 @@ pub fn for_each_pidl(
                 created,
                 type_name,
                 icon,
+                icon_pending,
                 file_attributes,
                 total,
                 free,

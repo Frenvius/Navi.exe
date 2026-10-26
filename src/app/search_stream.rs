@@ -1,5 +1,3 @@
-//! Live shell search batches. Requests cancel their predecessors; sorted row models are
-//! updated in place, retaining selection, cached fields, scroll and keyboard focus.
 use super::*;
 use std::sync::atomic::Ordering;
 
@@ -126,7 +124,7 @@ impl App {
         self: &Rc<Self>,
         request: u64,
         path: &str,
-        batch: Vec<ShellEntry>,
+        mut batch: Vec<ShellEntry>,
         icons: Vec<(u32, Rgba)>,
         hits: Vec<crate::Hit>,
     ) {
@@ -135,6 +133,7 @@ impl App {
         }
         let start = Instant::now();
         self.add_icons(&icons);
+        self.apply_known_icons(&mut batch);
         let (old_order, first) = {
             let mut st = self.state.borrow_mut();
             let first = st.entries.is_empty();
@@ -150,6 +149,7 @@ impl App {
         self.load_sort_texts();
         let sort_done = start.elapsed();
         self.sync_search_rows(&old_order);
+        self.resolve_icons();
         let rows_done = start.elapsed();
         self.sync_view_state();
         if first {
