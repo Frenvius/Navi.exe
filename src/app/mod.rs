@@ -1,5 +1,3 @@
-//! Application state and the glue between the shell backend and the Slint UI.
-
 mod actions;
 mod default_manager;
 mod settings;
@@ -53,6 +51,7 @@ use crate::shell::nav::{self, NavNode};
 use crate::{AppWindow, Crumb as UiCrumb, Entry, Icons, ListSlot, NavItem, Shell, TabItem};
 use images::Images;
 use navtree::{NavTree, RowRef};
+use navpane::tree_metrics;
 use sort::{Sort, SortKey};
 
 pub const VIEW_DETAILS: i32 = 6;
@@ -582,14 +581,11 @@ const TREE_PIN: [u8; 14 * 13] = [
 ];
 
 impl App {
-    /// The navigation pane's plates and expando glyphs, as the theme draws them.
-    fn load_tree_parts(icons: &Icons, dark_theme: bool) {
+    fn load_tree_parts(icons: &Icons, dark_theme: bool, row: i32) {
         use crate::shell::theme::*;
         let tile_plate = |bytes: &[u8]| {
             let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(bytes,8,8);
             let mut image = slint::Image::from_rgba8(buffer);
-            // One flat pixel beyond the 2px curve keeps filtering from bleeding
-            // corner colors into the stretched edges and center.
             image.set_nine_slice_edges(3,3,3,3);
             image
         };
@@ -605,10 +601,10 @@ impl App {
             }
             image
         };
-        icons.set_tree_hot(image(TVP_TREEITEM, TREIS_HOT, 8, 24, true));
-        icons.set_tree_selected(image(TVP_TREEITEM, TREIS_SELECTEDNOTFOCUS, 8, 24, true));
-        icons.set_tree_hot_selected(image(TVP_TREEITEM, TREIS_HOTSELECTED, 8, 24, true));
-        icons.set_tree_drop(image(TVP_TREEITEM, TREIS_SELECTED, 8, 24, true));
+        icons.set_tree_hot(image(TVP_TREEITEM, TREIS_HOT, 8, row, true));
+        icons.set_tree_selected(image(TVP_TREEITEM, TREIS_SELECTEDNOTFOCUS, 8, row, true));
+        icons.set_tree_hot_selected(image(TVP_TREEITEM, TREIS_HOTSELECTED, 8, row, true));
+        icons.set_tree_drop(image(TVP_TREEITEM, TREIS_SELECTED, 8, row, true));
         icons.set_tree_closed(image(TVP_GLYPH, GLPS_CLOSED, 16, 16, false));
         icons.set_tree_open(image(TVP_GLYPH, GLPS_OPENED, 16, 16, false));
         icons.set_tree_hot_closed(image(TVP_HOTGLYPH, GLPS_CLOSED, 16, 16, false));
@@ -653,7 +649,6 @@ impl App {
         icons.set_delete(images.svg("windows.ribbondelete"));
         icons.set_sort(images.svg("SortBy"));
         icons.set_view(images.svg("View"));
-        // Explorer's details icon is the one with lines, its preview icon the plain split.
         icons.set_details_pane(images.svg("windows.previewpane"));
         icons.set_preview_pane(images.svg("windows.readingpane"));
         icons.set_filter(images.svg("windows.ribbonfiltercommand"));
@@ -665,7 +660,7 @@ impl App {
         icons.set_home(images.svg("addressbar.home"));
         icons.set_gallery(images.svg("addressbar.gallery"));
         icons.set_network(images.svg("addressbar.network"));
-        Self::load_tree_parts(&icons, dark);
+        Self::load_tree_parts(&icons, dark, tree_metrics(ui.global::<Shell>().get_compact()).0 as i32);
         ui.global::<crate::Theme>().set_accent(slint::Color::from_argb_encoded(0xFF00_0000 | nav::accent_fill(dark)));
     }
 
@@ -1782,13 +1777,11 @@ impl App {
         if ids::same(&self.current_path(),ids::GALLERY) {self.layout_gallery();}
     }
 
-    /// Everything derived from the selection and location besides the rows themselves.
     pub fn sync_view_state(&self) {
         let ui = self.ui();
         let shell = ui.global::<Shell>();
         let st = self.state.borrow();
         let picked: Vec<&ShellEntry> = st.order.iter().map(|&i| &st.entries[i]).filter(|e| st.selected.contains(&e.path)).collect();
-        // Read-only timing probe, +1 distinguishes an empty selection from no property.
         unsafe { let _ = windows::Win32::UI::WindowsAndMessaging::SetPropW(self.hwnd.get(), windows::core::w!("SlintSelectionCount"),
             Some(windows::Win32::Foundation::HANDLE((picked.len()+1) as _)));
             let _ = windows::Win32::UI::WindowsAndMessaging::SetPropW(self.hwnd.get(), windows::core::w!("SlintSingleClick"),
@@ -1812,12 +1805,10 @@ impl App {
         shell.set_can_new(fs_folder || ids::same(&st.path,ids::LIBRARIES));
         let fs_selection = !picked.is_empty() && picked.iter().all(|e| e.is_fs || crate::shell::archive::root(&e.path).is_some());
         shell.set_fs_selection(fs_selection);
-        // Each command as the items allow it (a drive: copy and rename only).
         shell.set_can_cut(fs_selection && picked.iter().all(|e| e.can_move));
         shell.set_can_copy(fs_selection && picked.iter().all(|e| e.can_copy));
         shell.set_can_rename(fs_selection && picked.len() == 1 && picked[0].can_rename);
         shell.set_can_delete(fs_selection && picked.iter().all(|e| e.can_delete));
-        // Zip files selected: the command bar offers "Extrair tudo".
         shell.set_extract_view(crate::shell::archive::root(&st.path).is_some() || (fs_selection && picked.iter().all(|e| e.path.to_ascii_lowercase().ends_with(".zip"))));
         shell.set_can_share(fs_selection && picked.iter().all(|e| !e.is_dir));
         shell.set_single_selection(picked.len() == 1);
@@ -1827,12 +1818,14 @@ impl App {
         shell.set_status_bar(st.click_settings.status_bar);
         shell.set_single_click(st.click_settings.single_click);
         shell.set_underline_hover_only(st.click_settings.underline_hover_only);
-        shell.set_compact(st.compact);
+        if shell.get_compact() != st.compact {
+            shell.set_compact(st.compact);
+            Self::load_tree_parts(&ui.global::<Icons>(), crate::shell::theme::dark(), tree_metrics(st.compact).0 as i32);
+        }
         shell.set_all_selected(!st.order.is_empty() && picked.len() == st.order.len());
         shell.set_multi_selected(picked.len() > 1);
 
         let focused_row = st.focused.as_ref().and_then(|f| st.order.iter().position(|&i| &st.entries[i].path == f));
-        // A focused group header shows the focus instead of its first row.
         shell.set_focused_row(if st.focused_group.is_some() { -1 } else { focused_row.map(|r| r as i32).unwrap_or(-1) });
         shell.set_focused_group(st.focused_group.map(|r| r as i32).unwrap_or(-1));
         let renaming_row = st.renaming.as_ref().and_then(|f| st.order.iter().position(|&i| &st.entries[i].path == f));

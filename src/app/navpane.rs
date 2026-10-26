@@ -1,6 +1,3 @@
-//! The navigation pane's tree behavior: its own selection (the keyboard moves it without
-//! navigating, Enter goes there), expanding and collapsing, and item-aligned scrolling.
-
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -11,9 +8,9 @@ use super::navtree::RowRef;
 use super::{ids, is, App, TYPEAHEAD_RESET_MS};
 use crate::Shell;
 
-/// Tree rows are 24px; the first one starts 4px down.
-const ROW: f32 = 24.0;
-const TOP: f32 = 4.0;
+pub(super) fn tree_metrics(compact: bool) -> (f32, f32) {
+    if compact { (24.0, 4.0) } else { (32.0, 6.0) }
+}
 
 /// A row the user picked in the tree, remembered by its place and id, with the location
 /// shown when it was picked: it stays selected until the view goes somewhere else.
@@ -210,31 +207,28 @@ impl App {
         }
     }
 
-    /// The rows that fit in the pane, and the last row that can scroll to the top. The tree
-    /// counts a row fewer than its height holds (TVM_GETVISIBLECOUNT is 22 at 559px), which
-    /// sets its page, its scroll range and when its bar shows.
     pub(super) fn nav_extent(&self) -> (usize, usize) {
         let page = self.ui().global::<Shell>().get_nav_page();
+        let (row, _) = tree_metrics(self.state.borrow().compact);
         let n = self.state.borrow().nav.rows.len();
-        let fit = ((page / ROW).floor() as usize).saturating_sub(1).max(1);
+        let fit = ((page / row).floor() as usize).saturating_sub(1).max(1);
         (fit, n.saturating_sub(fit))
     }
 
-    /// The row at the top of the pane.
     fn nav_top(&self) -> usize {
+        let (row, margin) = tree_metrics(self.state.borrow().compact);
         let scroll = -self.ui().global::<Shell>().get_nav_scroll_y();
         if scroll <= 0.0 {
             0
         } else {
-            ((scroll - TOP) / ROW).round().max(0.0) as usize
+            ((scroll - margin) / row).round().max(0.0) as usize
         }
     }
 
-    /// `growing`: rows were just added, which the list only counts once it has laid them
-    /// out (it clamps the offset to its old height meanwhile); the pane applies it again then.
     fn nav_scroll_to(&self, top: usize, growing: bool) {
+        let (row, margin) = tree_metrics(self.state.borrow().compact);
         let top = top.min(self.nav_extent().1);
-        let y = if top == 0 { 0.0 } else { TOP + ROW * top as f32 };
+        let y = if top == 0 { 0.0 } else { margin + row * top as f32 };
         let ui = self.ui();
         let shell = ui.global::<Shell>();
         shell.set_nav_scroll_y(-y);
@@ -251,20 +245,20 @@ impl App {
         }
     }
 
-    /// The tree row at a point of the pane (`pane` wide), if it is an item.
     pub fn nav_row_at(&self, x: f32, y: f32, pane: f32) -> Option<usize> {
         let ui = self.ui();
         let shell = ui.global::<Shell>();
+        let (row_height, margin) = tree_metrics(self.state.borrow().compact);
         let n = self.state.borrow().nav.rows.len();
         let scrolls = self.nav_extent().1 > 0;
         if x < 0.0 || x >= pane - if scrolls { 17.0 } else { 0.0 } {
             return None;
         }
-        let content = y - shell.get_nav_scroll_y() - TOP;
+        let content = y - shell.get_nav_scroll_y() - margin;
         if content < 0.0 {
             return None;
         }
-        let row = (content / ROW) as usize;
+        let row = (content / row_height) as usize;
         (row < n && self.nav_is_node(row)).then_some(row)
     }
 

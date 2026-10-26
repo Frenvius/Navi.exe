@@ -1,11 +1,10 @@
-//! Drag and drop glue: which folder a point over the window drops into, and drag starts.
-
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
 use windows::Win32::Foundation::POINT;
 
+use super::navpane::tree_metrics;
 use super::{ids, with_app, App, ROW_LEFT};
 use crate::dnd::{Resolver, Spot, Target};
 use windows::Win32::System::Ole::DROPEFFECT_MOVE;
@@ -324,11 +323,11 @@ impl App {
         })
     }
 
-    /// A row of the navigation pane (at a point in the pane) takes a drop into its item.
     fn nav_target_at(&self, x: f32, y: f32, pane: f32) -> Option<Target> {
         if x<0.0 || x>=pane-if self.nav_extent().1>0 {17.0}else{0.0}{return None;}
         if self.drag_folders.get() {
             let st=self.state.borrow();let ui=self.ui();let shell=ui.global::<Shell>();
+            let (height,margin)=tree_metrics(st.compact);
             let pins=st.nav.rows.iter().enumerate().filter_map(|(i,r)|match &r.reference {
                 super::navtree::RowRef::Node{section,path} if *section==super::navtree::PINS && path.len()==1=>Some(i),_=>None
             }).collect::<Vec<_>>();
@@ -336,14 +335,14 @@ impl App {
             if let Some(row)=self.nav_row_at(x,y,pane) {
                 if st.nav.node(&st.nav.rows[row].reference).is_some_and(|n|ids::same(&n.node.id,ids::HOME)) {return make(usize::MAX,-1,Some(row));}
                 if let Some(at)=pins.iter().position(|&r|r==row) {
-                    let top=4.0+row as f32*24.0+shell.get_nav_scroll_y();
-                    if y-top<8.0{return make(at,top as i32,None);}
-                    if y-top>16.0{return make(at+1,(top+24.0) as i32,None);}
+                    let top=margin+row as f32*height+shell.get_nav_scroll_y();
+                    if y-top<height/3.0{return make(at,top as i32,None);}
+                    if y-top>height*2.0/3.0{return make(at+1,(top+height) as i32,None);}
                 }
             } else if let (Some(&first),Some(&last))=(pins.first(),pins.last()) {
-                let top=4.0+first as f32*24.0+shell.get_nav_scroll_y();let bottom=4.0+(last+1) as f32*24.0+shell.get_nav_scroll_y();
-                if y>=top-24.0 && y<top{return make(0,top as i32,None);}
-                if y>=bottom && y<bottom+24.0{return make(pins.len(),bottom as i32,None);}
+                let top=margin+first as f32*height+shell.get_nav_scroll_y();let bottom=margin+(last+1) as f32*height+shell.get_nav_scroll_y();
+                if y>=top-height && y<top{return make(0,top as i32,None);}
+                if y>=bottom && y<bottom+height{return make(pins.len(),bottom as i32,None);}
             }
         }
         let row = self.nav_row_at(x, y, pane)?;
