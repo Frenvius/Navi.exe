@@ -1,0 +1,152 @@
+// Status bar (24px) at the bottom of the window.
+import { Theme } from "theme.slint";
+import { Shell, Icons } from "shell.slint";
+import { TipArea } from "tooltip.slint";
+
+component Part inherits Rectangle {
+    in property <string> text;
+    in property <string> extra;
+    in property <bool> first;
+    property <length> pad-left: root.first ? 0px : 9px;
+    width: self.pad-left + label.preferred-width + (root.extra == "" ? 0px : 8px + extra-label.preferred-width) + 10px + 1px;
+    // DirectUI sets the 16px line a pixel above our centering.
+    label := Text {
+        x: root.pad-left;
+        y: 3px;
+        text: root.text;
+        font-family: Theme.font-dui;
+        font-size: 12px;
+        color: Theme.dui-text;
+        vertical-alignment: center;
+    }
+    extra-label := Text {
+        x: root.pad-left + label.preferred-width + 8px;
+        y: 3px;
+        visible: root.extra != "";
+        text: root.extra;
+        font-family: Theme.font-dui;
+        font-size: 12px;
+        color: Theme.dui-text;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        x: parent.width - 1px;
+        y: 6px;
+        width: 1px;
+        height: 12px;
+        background: Theme.status-divider;
+    }
+}
+
+// A 12px stroke of the toggles' pictures, its end pixels at 87.5%.
+component PictureLine inherits Rectangle {
+    in property <color> ink;
+    width: 12px;
+    height: 1px;
+    Rectangle { x: 0; width: 1px; background: root.ink; opacity: 0.875; }
+    Rectangle { x: 1px; width: 10px; background: root.ink; }
+    Rectangle { x: 11px; width: 1px; background: root.ink; opacity: 0.875; }
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> focused;
+    // Explorer's own pictures: 0 details, 1 large icons.
+    in property <int> kind;
+    in property <bool> on;
+    in property <string> tip;
+    callback clicked();
+    width: 24px;
+    height: 24px;
+    // Hovered, it gets a frame (#C3C3C3 dark, #02090D light) and no fill.
+    background: root.focused ? Theme.toggle-focus : root.on ? Theme.toggle-on : transparent;
+    border-width: root.on || touch.has-hover || root.focused ? 1px : 0px;
+    border-color: root.focused ? Theme.toggle-hover-border : root.on ? Theme.toggle-on-border : Theme.toggle-hover-border;
+    // Measured: dark draws a 16px plate with 2px corners at 4,4, #B9B9B9 (#C2C2C2 when on).
+    if Theme.dark: Rectangle {
+        x: root.on ? 5px : 4px;
+        y: root.on ? 5px : 4px;
+        width: 16px;
+        height: 16px;
+        border-radius: 2px;
+        background: root.on ? #c2c2c2 : #b9b9b9;
+    }
+    // The strokes, black on the plate (dark) or #555555 (light), a pixel down and right when
+    // on. Details: four 12px lines 3px apart from 6,7; large icons: a white 12x10 framed at
+    // 6,6 over a line at y 17. Corner and end pixels are at 87.5%.
+    property <color> stroke: Theme.dark ? #000000 : #555555;
+    Rectangle {
+        x: root.on ? 7px : 6px;
+        y: root.on ? 7px : 6px;
+        width: 12px;
+        height: 12px;
+        for line in root.kind == 0 ? [1px, 4px, 7px, 10px] : [11px]: PictureLine { y: line; ink: root.stroke; }
+        if root.kind == 1: Rectangle {
+            x: 1px;
+            y: 1px;
+            width: 10px;
+            height: 8px;
+            background: #ffffff;
+        }
+        if root.kind == 1: PictureLine { y: 0; ink: root.stroke; }
+        if root.kind == 1: PictureLine { y: 9px; ink: root.stroke; }
+        if root.kind == 1: Rectangle { x: 0; y: 1px; width: 1px; height: 8px; background: root.stroke; }
+        if root.kind == 1: Rectangle { x: 11px; y: 1px; width: 1px; height: 8px; background: root.stroke; }
+    }
+    touch := TipArea {
+        tip: root.tip;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component StatusBar inherits Rectangle {
+    height: 24px;
+    background: Theme.status;
+    property <int> focus-at;
+    public function focus-toggle() { root.focus-at = 0; scope.focus(); }
+    scope := FocusScope {
+        changed has-focus => { if self.has-focus { Shell.focus-noted("status"); } }
+        key-pressed(e) => {
+            if e.text == Key.RightArrow || e.text == Key.LeftArrow {
+                let at = max(0,min(1,root.focus-at + (e.text == Key.RightArrow ? 1 : -1)));
+                if at != root.focus-at {
+                    root.focus-at = at;
+                    Shell.command(at == 0 ? "view-details" : "view-large");
+                    self.focus();
+                }
+                return accept;
+            }
+            if e.text == Key.Return || e.text == " " {
+                Shell.command(root.focus-at == 0 ? "view-details" : "view-large"); self.focus(); return accept;
+            }
+            reject
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 4px;
+        Part {
+            first: true;
+            text: Shell.status-count;
+        }
+        if Shell.status-selection != "": Part {
+            text: Shell.status-selection;
+            extra: Shell.status-size;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Toggle {
+            focused: scope.has-focus && root.focus-at == 0;
+            kind: 0;
+            tip: @tr("status.details.tip");
+            on: Shell.view-mode == 6;
+            clicked => { Shell.command("view-details"); }
+        }
+        Toggle {
+            focused: scope.has-focus && root.focus-at == 1;
+            kind: 1;
+            tip: @tr("status.large-icons.tip");
+            on: Shell.view-mode == 2;
+            clicked => { Shell.command("view-large"); }
+        }
+    }
+}

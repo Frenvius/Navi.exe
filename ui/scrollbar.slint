@@ -1,0 +1,222 @@
+// DirectUI overlay scroll bar as Explorer draws it: a thin thumb that widens on hover,
+// with caret buttons at both ends.
+import { Theme, Glyphs, Glyph } from "theme.slint";
+
+// The items view's caret: a solid triangle with a blunt point (8x6, centred 9px into the
+// 17px square), #959595, a tenth bigger and #cdcdcd under the pointer.
+component Arrow inherits Rectangle {
+    in property <int> direction; // 0 up, 1 down, 2 left, 3 right
+    in property <bool> hot;
+    property <float> scale: root.hot ? 1.1 : 1;
+    animate scale { duration: 100ms; }
+    property <length> long: 8px * root.scale;
+    property <length> deep: 6px * root.scale;
+    Path {
+        x: 9px - (root.direction < 2 ? root.long : root.deep) / 2;
+        y: 9px - (root.direction < 2 ? root.deep : root.long) / 2;
+        width: root.direction < 2 ? root.long : root.deep;
+        height: root.direction < 2 ? root.deep : root.long;
+        fill: root.hot ? Theme.caret-hot : Theme.caret;
+        viewbox-width: root.direction < 2 ? 8 : 6;
+        viewbox-height: root.direction < 2 ? 6 : 8;
+        commands: root.direction == 0 ? "M 3.3 0 L 4.7 0 L 8 4.6 L 8 6 L 0 6 L 0 4.6 Z"
+            : root.direction == 1 ? "M 0 0 L 8 0 L 8 1.4 L 4.7 6 L 3.3 6 L 0 1.4 Z"
+            : root.direction == 2 ? "M 0 3.3 L 0 4.7 L 4.6 8 L 6 8 L 6 0 L 4.6 0 Z"
+            : "M 0 0 L 1.4 0 L 6 3.3 L 6 4.7 L 1.4 8 L 0 8 Z";
+    }
+}
+
+component Caret inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> shown;
+    // The items view's triangles instead of the glyph.
+    in property <bool> dui;
+    in property <int> direction;
+    callback step();
+    property <bool> repeating;
+    out property <bool> has-hover: touch.has-hover;
+    background: transparent;
+    if !root.dui: Glyph {
+        text: root.glyph;
+        font-size: 8px;
+        color: touch.has-hover ? Theme.xaml-caret-hot : Theme.xaml-caret;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: 100ms; delay: root.shown ? 0ms : 400ms; }
+    }
+    if root.dui: Arrow {
+        direction: root.direction;
+        hot: touch.has-hover;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: 100ms; delay: root.shown ? 0ms : 400ms; }
+    }
+    touch := TouchArea {
+        enabled: root.shown;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.repeating = false;
+                root.step();
+            }
+        }
+    }
+    Timer {
+        // DirectUI starts once on mouse-down, waits 400ms, then repeats.
+        interval: 400ms;
+        running: root.dui && touch.pressed && !root.repeating;
+        triggered => { root.repeating = true; root.step(); }
+    }
+    Timer {
+        interval: root.dui ? 60ms : 50ms;
+        running: touch.pressed && (!root.dui || root.repeating);
+        triggered => { root.step(); }
+    }
+}
+
+export component ScrollBar inherits Rectangle {
+    in property <bool> horizontal;
+    // Flickable offset (0 at the start, negative when scrolled).
+    in-out property <length> value;
+    in property <length> content;
+    in property <length> page;
+    // The items view's bar (17px): square, its carets and thumb as long as it is wide, the
+    // thumb's line 9px in, unchanged by hover or a drag.
+    in property <bool> dui;
+    // The arrows and the track ask for steps (lines, pages; negative: back) instead of
+    // moving by pixels.
+    in property <bool> stepped;
+    // Space before the content that scrolls away with the first step and doesn't count for
+    // the thumb (the nav tree's 4px margin).
+    in property <length> lead;
+    callback scrolled();
+    callback lines(int);
+    callback pages(int);
+
+    property <length> maximum: max(0px, root.content - root.page);
+    property <length> length: root.horizontal ? root.width : root.height;
+    property <length> cap: root.dui ? (root.horizontal ? root.height : root.width) : 16px;
+    property <length> track: root.length - 2 * root.cap;
+    // The items view's and the tree's thumbs sit on whole pixels, as Win32 bars do.
+    property <length> thumb-exact: max(root.dui ? root.cap : 24px, root.track * root.page / max(1px, root.content));
+    property <length> thumb-size: root.dui ? round(root.thumb-exact / 1px) * 1px : root.thumb-exact;
+    property <length> thumb-travel: root.maximum > 0 ? (max(0px, -root.value - root.lead) / root.maximum) * (root.track - root.thumb-size) : 0px;
+    property <length> thumb-pos: root.cap + (root.dui ? round(root.thumb-travel / 1px) * 1px : root.thumb-travel);
+    property <bool> hot: touch.has-hover || start.has-hover || finish.has-hover || touch.pressed;
+    property <length> drag-start-value;
+    property <length> drag-start-pointer;
+    property <bool> dragging;
+
+    visible: root.content > root.page + 1px;
+    background: Theme.track;
+    border-top-left-radius: root.dui ? 0px : 7px;
+    border-bottom-left-radius: root.dui || root.horizontal ? 0px : 7px;
+    border-top-right-radius: root.dui ? 0px : root.horizontal ? 7px : 0px;
+
+    function scroll-to(v: length) {
+        root.value = -max(0px, min(root.maximum, v));
+        root.scrolled();
+    }
+
+    // The light theme's items view bar keeps the content's color on its first line (the
+    // track shows 16px).
+    if root.dui: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.horizontal ? root.width : 1px;
+        height: root.horizontal ? 1px : root.height;
+        background: Theme.track-edge;
+    }
+
+    touch := TouchArea {
+        pointer-event(e) => {
+            if e.button != PointerEventButton.left { return; }
+            if e.kind == PointerEventKind.down {
+                let p = root.horizontal ? self.mouse-x : self.mouse-y;
+                if p >= root.thumb-pos && p < root.thumb-pos + root.thumb-size {
+                    root.dragging = true;
+                    root.drag-start-pointer = p;
+                    root.drag-start-value = -root.value;
+                } else if p >= root.cap && p < root.length - root.cap {
+                    // Clicking the track pages toward the pointer.
+                    if root.stepped {
+                        root.pages(p < root.thumb-pos ? -1 : 1);
+                    } else {
+                        root.scroll-to(-root.value + (p < root.thumb-pos ? -root.page : root.page));
+                    }
+                }
+            } else if e.kind == PointerEventKind.up {
+                root.dragging = false;
+            }
+        }
+        moved => {
+            if root.dragging {
+                let p = root.horizontal ? self.mouse-x : self.mouse-y;
+                let span = max(1px, root.track - root.thumb-size);
+                root.scroll-to(root.drag-start-value + (p - root.drag-start-pointer) * (root.maximum / span));
+            }
+        }
+        scroll-event(e) => {
+            if root.horizontal {
+                root.scroll-to(-root.value - e.delta-x - e.delta-y);
+            } else {
+                root.scroll-to(-root.value - e.delta-y);
+            }
+            accept
+        }
+    }
+
+    Rectangle {
+        property <length> thickness: root.hot ? 6px : 2px;
+        animate thickness { duration: 120ms; delay: root.hot ? 0ms : 400ms; }
+        // The items view's line sits 9px into the bar, the others' in its middle.
+        property <length> across: root.dui ? 9px - self.thickness / 2 : ((root.horizontal ? root.height : root.width) - self.thickness) / 2;
+        x: root.horizontal ? root.thumb-pos : self.across;
+        y: root.horizontal ? self.across : root.thumb-pos;
+        width: root.horizontal ? root.thumb-size : self.thickness;
+        height: root.horizontal ? self.thickness : root.thumb-size;
+        border-radius: root.dui ? 0px : 8px;
+        // The items view's line has square ends whose pixels are at 87% (measured #858585 on
+        // a #959595 line, dark): drawn as those end pixels and the line between.
+        background: root.dui ? transparent : root.dragging ? Theme.xaml-thumb-drag : root.hot ? Theme.xaml-thumb-hot : Theme.xaml-thumb;
+        if root.dui: Rectangle {
+            x: root.horizontal ? 1px : 0;
+            y: root.horizontal ? 0 : 1px;
+            width: root.horizontal ? parent.width - 2px : parent.width;
+            height: root.horizontal ? parent.height : parent.height - 2px;
+            background: Theme.thumb;
+        }
+        for end in (root.dui ? [0, 1] : []): Rectangle {
+            x: root.horizontal ? (end == 0 ? 0 : parent.width - 1px) : 0;
+            y: root.horizontal ? 0 : (end == 0 ? 0 : parent.height - 1px);
+            width: root.horizontal ? 1px : parent.width;
+            height: root.horizontal ? parent.height : 1px;
+            background: Theme.thumb;
+            opacity: 0.873;
+        }
+    }
+
+    start := Caret {
+        x: 0;
+        y: 0;
+        width: root.horizontal ? root.cap : root.width - (root.dui ? 0px : 1px);
+        height: root.horizontal ? root.height - (root.dui ? 0px : 1px) : root.cap;
+        glyph: root.horizontal ? Glyphs.caret-left : Glyphs.caret-up;
+        dui: root.dui;
+        direction: root.horizontal ? 2 : 0;
+        shown: root.hot;
+        step => {
+            if root.stepped { root.lines(-1); } else { root.scroll-to(-root.value - 48px); }
+        }
+    }
+    finish := Caret {
+        x: root.horizontal ? root.width - root.cap : 0;
+        y: root.horizontal ? 0 : root.height - root.cap;
+        width: root.horizontal ? root.cap : root.width - (root.dui ? 0px : 1px);
+        height: root.horizontal ? root.height - (root.dui ? 0px : 1px) : root.cap;
+        glyph: root.horizontal ? Glyphs.caret-right : Glyphs.caret-down;
+        dui: root.dui;
+        direction: root.horizontal ? 3 : 1;
+        shown: root.hot;
+        step => {
+            if root.stepped { root.lines(1); } else { root.scroll-to(-root.value + 48px); }
+        }
+    }
+}

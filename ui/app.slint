@@ -1,0 +1,358 @@
+import { SettingsView } from "settings.slint";
+import { Theme } from "theme.slint";
+import { Shell, Icons, TabItem, Crumb, Entry, Field, NavItem, MenuEntry, MenuButton, FilterRow } from "shell.slint";
+import { TabStrip, TabDragPreview } from "tabstrip.slint";
+export { TabDragPreview }
+import { NavigationBar } from "navbar.slint";
+import { CommandBar } from "commandbar.slint";
+import { Sidebar } from "sidebar.slint";
+import { DetailsView } from "details.slint";
+import { TilesView } from "tiles.slint";
+import { IconsView } from "icons-view.slint";
+import { GalleryView } from "gallery.slint";
+import { DetailsPane, Pane, DetailRow } from "details-pane.slint";
+import { PreviewPane, PreviewInfo } from "preview-pane.slint";
+import { StatusBar } from "statusbar.slint";
+import { MenuLayer, MenuPopup, PopupData, MenuKeyTips, MenuKeyTip } from "menu.slint";
+import { TipLayer, Tip, TipPopup } from "tooltip.slint";
+import { FilterLayer } from "header-filter.slint";
+import { DropPreview } from "drop-preview.slint";
+
+export { Shell, Tip, Icons, Theme, TabItem, Crumb, Entry, Field, NavItem, MenuEntry, MenuButton, FilterRow, Pane, DetailRow, MenuPopup, PopupData, PreviewInfo, TipPopup }
+export { DropPreview, MenuKeyTips, MenuKeyTip }
+
+export component AppWindow inherits Window {
+    in property <string> window-title: @tr("app.title");
+    // The folder view's place in the window, for Ctrl+wheel zooming over it.
+    out property <length> view-left: icons.absolute-position.x;
+    out property <length> view-top: icons.absolute-position.y;
+    out property <length> view-width: icons.width;
+    out property <length> view-height: icons.height;
+    title: root.window-title;
+    preferred-width: 1102px;
+    preferred-height: 720px;
+    min-width: 500px;
+    min-height: 300px;
+    // Transparent so Mica Alt shows through the title bar and navigation row.
+    background: Shell.native-shell-view ? (Theme.dark ? #191919 : #ffffff) : transparent;
+    default-font-family: Theme.font-text;
+    default-font-size: 14px;
+
+    in property <bool> font-test;
+    in property <bool> menu-chrome-probe;
+    callback global-key(KeyEvent) -> bool;
+    callback focus-list();
+    callback type-search(string);
+    type-search(text) => { nav.type-search(text); }
+    callback focus-tree();
+    callback focus-commands();
+    // Frame-handled Alt navigation must not turn the eventual Alt-up into a lone Alt.
+    callback consume-alt();
+    consume-alt => { keys.alt-alone = false; }
+    callback focus-target(string);
+    focus-target(zone) => {
+        if zone == "neutral" { keys.focus(); Shell.focus-noted("neutral"); }
+        if zone == "list" { root.focus-list(); }
+        if zone == "header" { details.focus-header(); }
+        if zone == "status" { status.focus-toggle(); }
+        if zone == "tab" { tabs.focus-tab(); }
+        if zone == "new-tab" { tabs.focus-new(); }
+        if zone == "settings-toggle" { settings.focus-toggle(); }
+        if zone == "settings-section" { settings.focus-section(); }
+        if zone == "settings-restore" { settings.focus-restore(); }
+        if zone == "settings" { nav.focus-button(zone); }
+        if zone == "back" || zone == "forward" || zone == "up" || zone == "refresh" { nav.focus-button(zone); }
+        if zone == "address" { nav.edit-address(); }
+        if zone == "crumbs" { nav.focus-crumb(); }
+        if zone == "search" { nav.focus-search(); }
+        if zone == "commands" { commandbar.focus-first(); }
+        if zone == "commands-last" { commandbar.focus-last(); }
+        if zone == "pane-command" { commandbar.focus-pane(); }
+        if zone == "tree" { sidebar.focus-tree(); }
+        if zone == "pane-share" || zone == "pane-properties" { pane.focus-button(zone); }
+    }
+    focus-commands => { commandbar.focus-first(); }
+    focus-tree => { sidebar.focus-tree(); }
+    focus-list => {
+        if Shell.settings-view {
+            settings.focus-toggle();
+        } else if Shell.native-shell-view {
+            Shell.native-view-focus();
+        } else if Shell.gallery-view {
+            gallery.focus-list();
+        } else if Shell.drives-view {
+            tiles.focus-list();
+        } else if Shell.icons-view {
+            icons.focus-list();
+        } else {
+            details.focus-list();
+        }
+    }
+
+    keys := FocusScope {
+        property <bool> alt-alone;
+        capture-key-pressed(e) => {
+            self.alt-alone = e.text == Key.Alt;
+            if Shell.tab-drag >= 0 && e.text == Key.Escape {
+                Shell.tab-drag = -1;
+                return accept;
+            }
+            // The header filter: arrows move its lit row, space checks it, Enter or Esc close.
+            if Shell.filter-column >= 0 {
+                if e.text == Key.Escape || e.text == Key.Return {
+                    Shell.filter-dismissed();
+                } else if e.text == Key.UpArrow {
+                    Shell.filter-hot = max(0, Shell.filter-hot - 1);
+                } else if e.text == Key.DownArrow {
+                    Shell.filter-hot = min(Shell.filter-rows.length - 1, Shell.filter-hot + 1);
+                } else if e.text == " " {
+                    Shell.filter-toggle(Shell.filter-hot);
+                }
+                return accept;
+            }
+            if Shell.renaming-row < 0 && !e.modifiers.control && !e.modifiers.alt && (e.text == Key.Tab || e.text == Key.F6) {
+                Shell.focus-step(e.modifiers.shift,e.text == Key.F6);
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "l" || e.text == "L")) || e.text == Key.F4 || (e.modifiers.alt && (e.text == "d" || e.text == "D")) {
+                nav.edit-address();
+                return accept;
+            }
+            // Ctrl+Shift+E is the tree's (open it down to the folder).
+            if (e.modifiers.control && !e.modifiers.shift && (e.text == "e" || e.text == "f" || e.text == "E" || e.text == "F")) || e.text == Key.F3 {
+                nav.focus-search();
+                return accept;
+            }
+            if root.global-key(e) { return accept; }
+            reject
+        }
+        capture-key-released(e) => {
+            if e.text == Key.Alt && self.alt-alone {
+                commandbar.focus-first();
+                self.alt-alone = false;
+                return accept;
+            }
+            reject
+        }
+
+        // Full screen (F11) shows no tabs, address nor command bar: the panes start at the top.
+        property <length> content-top: Shell.full-screen ? 0px : Shell.settings-view ? 88px : Shell.native-shell-view ? 86px : 136px;
+        property <length> status-height: Shell.status-bar && !Shell.native-shell-view && !Shell.settings-view ? 24px : 0px;
+
+        tabs := TabStrip {
+            visible: !Shell.full-screen;
+            y: 0;
+            width: parent.width;
+        }
+
+        commandbar := CommandBar {
+            visible: !Shell.full-screen && !Shell.native-shell-view && !Shell.settings-view;
+            y: 88px;
+            width: parent.width;
+        }
+
+        Rectangle {
+            y: parent.content-top;
+            width: parent.width;
+            height: parent.height - parent.content-top - parent.status-height;
+            background: Theme.content;
+
+            if Shell.native-shell-view: Rectangle {
+                width:parent.width;height:parent.height;
+                init => {Shell.native-viewport(self.absolute-position.x,self.absolute-position.y,self.width,self.height);}
+                changed width => {Shell.native-viewport(self.absolute-position.x,self.absolute-position.y,self.width,self.height);}
+                changed height => {Shell.native-viewport(self.absolute-position.x,self.absolute-position.y,self.width,self.height);}
+            }
+            sidebar := Sidebar {
+                visible:!Shell.native-shell-view && !Shell.settings-view;
+                x: 0;
+                height: parent.height;
+            }
+
+            property <length> pane-width: Shell.details-pane || Shell.preview-pane ? 299px : 0px;
+            // The pane's splitter shows 3px; the view runs up to it.
+            property <length> view-width: self.width - sidebar.width - self.pane-width - (self.pane-width > 0 ? 3px : 0px);
+            property <length> notice-height: Shell.network-notice == "" ? 0px : 32px;
+
+            if Shell.network-notice != "": Rectangle {
+                x: sidebar.width;
+                y: 0px;
+                width: parent.width - sidebar.width;
+                height: parent.notice-height;
+                background: Theme.dark ? #353328 : #fff4ce;
+                Text { x: 12px; width: 16px; height: parent.height; text: "\u{e7ba}"; font-family: Theme.font-icons; font-size: 16px; color: Theme.dark ? #fce100 : #9d5d00; vertical-alignment: center; }
+                Text { x: 40px; width: parent.width - 52px; height: parent.height; text: Shell.network-notice; font-family: Theme.font-text; font-size: 14px; color: Theme.text; vertical-alignment: center; overflow: elide; }
+                TouchArea { mouse-cursor: pointer; clicked => { Shell.network-settings(); } }
+            }
+
+            details := DetailsView {
+                x: sidebar.width;
+                y: parent.notice-height;
+                width: parent.view-width;
+                height: parent.height - parent.notice-height;
+                visible: !Shell.settings-view && !Shell.native-shell-view && !Shell.gallery-view && !Shell.drives-view && !Shell.icons-view;
+            }
+
+            icons := IconsView {
+                x: sidebar.width;
+                y: parent.notice-height;
+                width: parent.view-width;
+                height: parent.height - parent.notice-height;
+                visible: !Shell.settings-view && !Shell.native-shell-view && !Shell.gallery-view && Shell.icons-view && !Shell.drives-view;
+            }
+            gallery := GalleryView {
+                x: sidebar.width;
+                width: parent.view-width;
+                height: parent.height;
+                visible: Shell.gallery-view;
+            }
+
+            tiles := TilesView {
+                x: sidebar.width;
+                y: parent.notice-height;
+                width: parent.view-width;
+                height: parent.height - parent.notice-height;
+                visible: Shell.drives-view;
+            }
+
+            pane := DetailsPane {
+                visible: Shell.details-pane && !Shell.native-shell-view && !Shell.settings-view;
+                x: parent.width - parent.pane-width - 3px;
+                width: parent.pane-width + 3px;
+                y: parent.notice-height;
+                height: parent.height - parent.notice-height;
+            }
+
+            if Shell.preview-pane && !Shell.native-shell-view && !Shell.settings-view: PreviewPane {
+                x: parent.width - parent.pane-width - 3px;
+                width: parent.pane-width + 3px;
+                y: parent.notice-height;
+                height: parent.height - parent.notice-height;
+            }
+        }
+
+        settings := SettingsView {
+            visible:Shell.settings-view;
+            x:0px;y:parent.content-top;width:parent.width;
+            height:parent.height - parent.content-top;
+        }
+
+        status := StatusBar {
+            visible: Shell.status-bar && !Shell.native-shell-view && !Shell.settings-view;
+            y: parent.height - 24px;
+            width: parent.width;
+        }
+
+        // After the rest, so the address bar's suggestions hang over it.
+        nav := NavigationBar {
+            y: Shell.native-shell-view ? 32px : 40px;
+            width: parent.width;
+            visible: !Shell.full-screen;
+        }
+
+        // While a menu is open, Explorer's XAML strip (tabs, address and command bars) only
+        // takes the click that closes it, and lights up nothing; the views below still do.
+        if Shell.menu-open: TouchArea {
+            y: 0;
+            width: parent.width;
+            height: 136px;
+        }
+
+        if root.font-test: Rectangle {
+            background: #191919;
+            for f[i] in [
+                { family: "Segoe UI Variable Small", size: 12px },
+                { family: "Segoe UI Variable Text", size: 12px },
+                { family: "Segoe UI Variable Display", size: 12px },
+                { family: "Segoe UI", size: 12px },
+                { family: "Segoe UI Variable", size: 12px },
+                { family: "Segoe UI Variable Small", size: 12.5px },
+                { family: "Segoe UI Variable Text", size: 12.5px },
+                { family: "Segoe UI Variable Small", size: 13px },
+                { family: "Segoe UI Variable Text", size: 13px },
+                { family: "Segoe UI Variable Small", size: 14px },
+                { family: "Segoe UI Variable Text", size: 14px },
+                { family: "Segoe UI Variable Display", size: 14px },
+            ]: Text {
+                x: 20px;
+                y: 20px + i * 30px;
+                text: "tauri-win-explorer";
+                font-family: f.family;
+                font-size: f.size;
+                color: white;
+            }
+        }
+
+        TipLayer {
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if Shell.filter-column >= 0: FilterLayer {
+            width: parent.width;
+            height: parent.height;
+        }
+
+        if Shell.menu-open && Shell.menu-inline: MenuLayer {
+            width: parent.width;
+            height: parent.height;
+        }
+
+        // A drag over a crumb: the XAML bar draws the item (its 80px picture centred on the
+        // pointer, 30px up, inside the bar's strip) and its caption over it, 11px up.
+        if Shell.drag-caption != "": Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 136px;
+            clip: true;
+            Image {
+                x: Shell.drag-x - 40px;
+                y: Shell.drag-y - 70px;
+                width: 80px;
+                height: 80px;
+                source: Shell.drag-image;
+            }
+        }
+        if Shell.drag-caption != "": Rectangle {
+            x: round((Shell.drag-x - self.width / 2) / 1px) * 1px;
+            y: Shell.drag-y - 11px - self.height;
+            width: caption-text.preferred-width + 40px;
+            height: 37px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: Theme.caption-box-border;
+            background: Theme.caption-box;
+            Text {
+                x: 8px;
+                width: 16px;
+                height: parent.height;
+                text: Shell.drag-glyph;
+                font-family: Theme.font-icons;
+                font-size: 14px;
+                color: Theme.text;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            caption-text := Text {
+                x: 31px;
+                height: parent.height;
+                text: Shell.drag-caption;
+                font-size: 14px;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if root.menu-chrome-probe: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        HorizontalLayout {
+            spacing: 0px; padding: 0px;
+            Rectangle { background: #ffffff; }
+            Rectangle { background: #000000; }
+        }
+    }
+    init => { details.focus-list(); }
+}

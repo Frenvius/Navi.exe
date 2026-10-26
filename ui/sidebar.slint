@@ -1,0 +1,247 @@
+// Navigation pane (Explorer's SysTreeView32 in the dark Explorer style; its plates and
+// expando glyphs are the theme's own parts, drawn by uxtheme).
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Shell, NavItem, Icons } from "shell.slint";
+import { ScrollBar } from "scrollbar.slint";
+
+component NavRow inherits Rectangle {
+    in property <NavItem> item;
+    in property <int> index;
+    // The pointer is over the pane, or the tree has the keyboard focus: the expandos show.
+    in property <bool> expandos;
+    in property <bool> tree-focus;
+    callback pressed();
+    height: 24px;
+
+    if root.item.separator: Rectangle {
+        x: 8px;
+        y: 12px;
+        width: parent.width - 16px;
+        height: 1px;
+        background: Theme.separator;
+    }
+
+    if !root.item.separator && !root.item.pad: touch := TouchArea {
+        property <bool> source-drag;
+        moved => {
+            if self.pressed && !self.source-drag && (abs(self.mouse-x - self.pressed-x)>=4px || abs(self.mouse-y - self.pressed-y)>=4px) {
+                self.source-drag=true;
+                Shell.nav-drag-start(root.index);
+            }
+        }
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                self.source-drag=false;
+            }
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.middle {
+                Shell.nav-middle(root.index);
+            }
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.right {
+                root.pressed();
+                Shell.nav-context(root.index, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+        clicked => { if !self.source-drag { root.pressed(); Shell.nav-clicked(root.index); } }
+        double-clicked => { Shell.nav-toggled(root.index); }
+
+        // Selected: the theme's "hot selected" plate while hovered or focused, else the
+        // "selected, not focused" one. While a drag is over the tree, its target and the
+        // selection take the "selected" one (accent edged).
+        property <bool> dragging: Shell.file-drag;
+        // A menu (the row's own context menu included) takes the pointer: no row lights up.
+        property <bool> hot: self.has-hover && !Shell.menu-open && !self.dragging;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            image-fit: fill;
+            source: touch.dragging && Shell.nav-drop-row == root.index ? Icons.tree-drop
+                : root.item.selected ? (touch.hot || root.tree-focus ? Icons.tree-hot-selected : Icons.tree-selected)
+                : touch.hot ? Icons.tree-hot : Icons.none;
+        }
+
+        if root.item.expandable: Image {
+            x: root.item.depth * 8px + 3px;
+            y: 4px;
+            width: 16px;
+            height: 16px;
+            source: expander.has-hover
+                ? (root.item.expanded ? Icons.tree-hot-open : Icons.tree-hot-closed)
+                : (root.item.expanded ? Icons.tree-open : Icons.tree-closed);
+            opacity: root.expandos ? 1 : 0;
+            // SysTreeView32 fades in over 200 ms and out over one second.
+            animate opacity { duration: root.expandos ? 200ms : 1000ms; }
+            expander := TouchArea {
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                        root.pressed();
+                        Shell.nav-toggled(root.index);
+                    }
+                }
+            }
+        }
+
+        Image {
+            x: root.item.depth * 8px + 24px;
+            y: 4px;
+            width: 16px;
+            height: 16px;
+            source: root.item.icon;
+        }
+
+        Text {
+            x: root.item.depth * 8px + 45px;
+            y: -1px;
+            width: parent.width - self.x - (root.item.pinned ? 25px : 0px);
+            height: parent.height;
+            text: root.item.name;
+            font-family: Theme.font-dui;
+            font-size: 12px;
+            color: Theme.dui-text;
+            vertical-alignment: center;
+            // The tree clips long names at its edge, without an ellipsis.
+            overflow: clip;
+        }
+
+        if root.item.pinned: Image {
+            x: parent.width - 15px;
+            y: 6px;
+            width: 14px;
+            height: 13px;
+            source: Icons.tree-pin;
+        }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    width: Shell.sidebar-width + 6px;
+    public function focus-tree() { tree.focus(); }
+    background: Theme.content;
+
+    Rectangle {
+        x: 0;
+        width: 2px;
+        background: Theme.pane-edge;
+    }
+
+    area := Rectangle {
+        x: 2px;
+        width: Shell.sidebar-width;
+        // The tree's rows (without the list's blank ones), and the rows it counts as shown:
+        // one fewer than its height holds. It scrolls, and shows its bar, past those.
+        property <int> rows: Shell.nav.length - 3;
+        property <int> fit: max(1, floor(Shell.nav-page / 24px) - 1);
+        property <bool> scrolls: self.rows > self.fit;
+
+        tree := FocusScope {
+            key-pressed(e) => {
+                if Shell.nav-key(e) {
+                    return accept;
+                }
+                reject
+            }
+            changed has-focus => { Shell.nav-focused = self.has-focus; if self.has-focus { Shell.focus-noted("tree"); } }
+
+            hover := TouchArea {
+                // Rows past the end, and the pane around them, still give the tree the focus.
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down {
+                        tree.focus();
+                    }
+                    if e.kind == PointerEventKind.up && e.button == PointerEventButton.right {
+                        Shell.nav-context(-1,self.absolute-position.x+self.mouse-x,self.absolute-position.y+self.mouse-y);
+                    }
+                }
+                // Every row is 24px (the list estimates its height from them): Rust pads the
+                // rows with a blank one at the start and two at the end, and the list starts
+                // 20px up so the first blank leaves the tree's 4px margin. The ones at the end
+                // let the last scroll position put a row at the top, as the tree scrolls whole
+                // rows, with its page's spare row below.
+                Rectangle {
+                    clip: true;
+                    list := ListView {
+                        y: -20px;
+                        height: parent.height + 20px;
+                        vertical-scrollbar-policy: always-off;
+                        horizontal-scrollbar-policy: always-off;
+                        content-y <=> Shell.nav-scroll-y;
+                        changed visible-height => { Shell.nav-page = self.visible-height - 20px; }
+                        init => { Shell.nav-page = self.visible-height - 20px; }
+                        changed content-height => {
+                            if Shell.nav-scroll-want >= 0 {
+                                self.content-y = -Shell.nav-scroll-want;
+                                Shell.nav-scroll-want = -1px;
+                            }
+                        }
+                        for item[i] in Shell.nav: NavRow {
+                            // With a scroll bar the rows leave it room, as the tree's client
+                            // area does.
+                            width: parent.width - (area.scrolls ? 17px : 0px);
+                            height: 24px;
+                            item: item;
+                            index: i - 1;
+                            // An inactive window's tree has lost the focus.
+                            expandos: hover.has-hover || (tree.has-focus && Shell.active);
+                            tree-focus: tree.has-focus && Shell.active;
+                            pressed => { tree.focus(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        if Shell.nav-insert-y >= 0px: Rectangle {
+            x: 25px;
+            y: Shell.nav-insert-y;
+            width: parent.width - 31px;
+            height: 2px;
+            background: Theme.dui-text;
+            Rectangle { y: -2px; width: 1px; height: 6px; background: Theme.dui-text; }
+            Rectangle { x: 1px; y: -1px; width: 1px; height: 4px; background: Theme.dui-text; }
+            Rectangle { x: parent.width - 1px; y: -2px; width: 1px; height: 6px; background: Theme.dui-text; }
+            Rectangle { x: parent.width - 2px; y: -1px; width: 1px; height: 4px; background: Theme.dui-text; }
+        }
+
+        // The tree's bar is the items view's (17px, carets, the thumb's line 9px in), counting
+        // rows: its thumb is the page's share of the rows.
+        ScrollBar {
+            dui: true;
+            stepped: true;
+            x: parent.width - self.width;
+            width: 17px;
+            value <=> list.content-y;
+            lead: 4px;
+            content: area.scrolls ? area.rows * 24px : 0px;
+            page: area.fit * 24px;
+            lines(n) => { Shell.nav-lines(n); }
+            pages(n) => { Shell.nav-pages(n); }
+            scrolled => { Shell.nav-dragged(); }
+        }
+    }
+
+    // 4px splitter: the pane edge, then the outer, middle and outer lines.
+    Rectangle {
+        x: parent.width - 4px;
+        width: 4px;
+        HorizontalLayout {
+            Rectangle { width: 1px; background: Theme.pane-edge; }
+            Rectangle { width: 1px; background: Theme.splitter-outer; }
+            Rectangle { width: 1px; background: Theme.splitter-mid; }
+            Rectangle { width: 1px; background: Theme.splitter-outer; }
+        }
+        splitter := TouchArea {
+            mouse-cursor: ew-resize;
+            property <length> start-width;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    self.start-width = Shell.sidebar-width;
+                }
+            }
+            moved => {
+                if self.pressed {
+                    Shell.sidebar-resized(self.start-width + self.mouse-x - self.pressed-x);
+                }
+            }
+        }
+    }
+}

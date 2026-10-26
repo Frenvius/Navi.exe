@@ -1,0 +1,124 @@
+// The details header's filter (its chevron's dropdown), measured from explorer.exe (dark). It
+// keeps the classic light look in both themes: a 1px #646464 frame on #F9F9F9, 21px rows
+// from 3px in, each a 13px check box at 9, the lit row's box from 33 to 4px before the edge,
+// a 16px icon at 41 and the label at 61, about 75px after the widest one; a classic drop shadow.
+import { Theme } from "theme.slint";
+import { Shell, FilterRow } from "shell.slint";
+
+component FilterCheck inherits Rectangle {
+    in property <bool> checked;
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    border-width: root.checked ? 0px : 1px;
+    border-color: #626262;
+    background: root.checked ? #005fb8 : #f3f3f3;
+    if root.checked: Path {
+        width: 13px;
+        height: 13px;
+        viewbox-width: 13;
+        viewbox-height: 13;
+        commands: "M 3.5 6.6 L 5.6 8.7 L 10 4.3";
+        stroke: #ffffff;
+        stroke-width: 1px;
+    }
+}
+
+component FilterItem inherits Rectangle {
+    in property <FilterRow> value;
+    in property <int> index;
+    height: 21px;
+    // Fitted with DirectWrite's widths ("Documento de Texto" 110.19 makes 247, "Hoje" 24.73
+    // makes 162, "M – R" 30.53 makes 167).
+    preferred-width: ceil((61px + root.value.width + 75.4px) / 1px) * 1px;
+    property <bool> lit: Shell.filter-hot == root.index;
+
+    if root.lit: Rectangle {
+        x: 33px;
+        width: parent.width - 36px;
+        border-width: 1px;
+        border-radius: 1px;
+        border-color: #0078d4;
+        background: #c7e3fa;
+    }
+    FilterCheck {
+        x: 9px;
+        y: 4px;
+        checked: root.value.checked;
+    }
+    Image {
+        x: 41px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        source: Shell.filter-icon;
+    }
+    label := Text {
+        x: 61px;
+        height: parent.height;
+        text: root.value.label;
+        font-family: Theme.font-dui;
+        font-size: 12px;
+        color: #000000;
+        vertical-alignment: center;
+    }
+    // The check box's side adds or removes the value; the rest filters by it alone.
+    TouchArea {
+        x: 0;
+        width: 33px;
+        changed has-hover => { if self.has-hover { Shell.filter-hot = root.index; } }
+        clicked => { Shell.filter-toggle(root.index); }
+    }
+    TouchArea {
+        x: 33px;
+        width: parent.width - 33px;
+        changed has-hover => { if self.has-hover { Shell.filter-hot = root.index; } }
+        clicked => { Shell.filter-only(root.index); }
+    }
+}
+
+export component FilterLayer inherits Rectangle {
+    // A click anywhere else closes it.
+    TouchArea {
+        clicked => { Shell.filter-dismissed(); }
+    }
+
+    // CS_DROPSHADOW: 4px to the right and below, from 5px in, fading out.
+    for a[i] in [0.44, 0.32, 0.16, 0.04]: Rectangle {
+        x: popup.x + popup.width + i * 1px;
+        y: popup.y + 8px;
+        width: 1px;
+        height: popup.height - 8px + i * 1px;
+        background: #000000;
+        opacity: a;
+    }
+    for a[i] in [0.44, 0.32, 0.16, 0.04]: Rectangle {
+        x: popup.x + 8px;
+        y: popup.y + popup.height + i * 1px;
+        width: popup.width - 8px + i * 1px;
+        height: 1px;
+        background: #000000;
+        opacity: a;
+    }
+
+    popup := Rectangle {
+        x: Shell.filter-x;
+        y: Shell.filter-y;
+        width: rows.preferred-width;
+        height: rows.preferred-height;
+        background: #f9f9f9;
+        TouchArea { }
+        rows := VerticalLayout {
+            padding-top: 3px;
+            padding-bottom: 3px;
+            for row[i] in Shell.filter-rows: FilterItem {
+                value: row;
+                index: i;
+            }
+        }
+        Rectangle {
+            border-width: 1px;
+            border-color: #646464;
+        }
+    }
+}

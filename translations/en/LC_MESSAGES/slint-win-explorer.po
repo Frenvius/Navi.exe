@@ -1,0 +1,484 @@
+# English for slint-win-explorer. The msgids are the keys the code uses; both Slint's
+# @tr() (bundled at build time) and src/i18n.rs read this file. Strings the shell has
+# itself (group names, default names, "free of") come from its resources instead.
+# Measured on the real Explorer with an English display language, or read from the same
+# resource in Windows' en-US language pack (tools/winstr.py) (2026-10-23).
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+# Window and tabs
+msgid "app.title"
+msgstr "File Explorer"
+
+msgid "tab.close.tip"
+msgstr "Close tab (Ctrl+W)"
+
+msgid "tab.new.tip"
+msgstr "Add new tab (Ctrl+T)"
+
+# Address bar
+msgid "nav.back.tip"
+msgstr "Back to {}"
+
+msgid "nav.forward.tip"
+msgstr "Forward to {}"
+
+msgid "nav.up-to.tip"
+msgstr "Up to \"{}\" (Alt + Up Arrow)"
+
+msgid "nav.up.tip"
+msgstr "Up one level (Alt + Up Arrow)"
+
+msgid "nav.refresh.tip"
+msgstr "Refresh \"{}\" (F5)"
+
+msgid "nav.search"
+msgstr "Search {}"
+
+msgid "address.copy"
+msgstr "Copy Address"
+
+msgid "address.copy-text"
+msgstr "Copy Address as Text"
+
+msgid "address.edit"
+msgstr "Edit Address"
+
+msgid "address.delete-history"
+msgstr "Delete History"
+
+msgid "address.select-all"
+msgstr "Select All"
+
+# Command bar
+msgid "cmd.new"
+msgstr "New"
+
+msgid "cmd.cut.tip"
+msgstr "Cut"
+
+msgid "cmd.copy.tip"
+msgstr "Copy"
+
+msgid "cmd.paste.tip"
+msgstr "Paste"
+
+msgid "cmd.rename.tip"
+msgstr "Rename"
+
+msgid "cmd.share"
+msgstr "Share"
+
+msgid "cmd.delete.tip"
+msgstr "Delete"
+
+msgid "cmd.sort"
+msgstr "Sort"
+
+msgid "cmd.view"
+msgstr "View"
+
+msgid "cmd.preview"
+msgstr "Preview"
+
+msgid "cmd.filter"
+msgstr "Filter"
+
+msgid "cmd.background.tip"
+msgstr "Set the selected picture as your desktop background."
+
+msgid "cmd.background"
+msgstr "Set as background"
+
+msgid "cmd.see-more.tip"
+msgstr "See more"
+
+msgid "cmd.preview-pane.tip"
+msgstr "Show or hide the preview pane."
+
+msgid "cmd.details-pane.tip"
+msgstr "Show or hide the details pane."
+
+msgid "cmd.details"
+msgstr "Details"
+
+# Columns and properties
+msgid "column.name"
+msgstr "Name"
+
+msgid "column.modified"
+msgstr "Date modified"
+
+msgid "column.modified.group"
+msgstr "Date modified"
+
+msgid "column.type"
+msgstr "Type"
+
+msgid "column.size"
+msgstr "Size"
+
+msgid "column.location"
+msgstr "File location"
+
+# Sort and group menus
+msgid "menu.more"
+msgstr "More"
+
+msgid "menu.more-columns"
+msgstr "More..."
+
+msgid "menu.ascending"
+msgstr "Ascending"
+
+msgid "menu.descending"
+msgstr "Descending"
+
+msgid "menu.group-by"
+msgstr "Group by"
+
+msgid "menu.sort-by"
+msgstr "Sort by"
+
+msgid "menu.group-none"
+msgstr "(None)"
+
+# View menu
+msgid "menu.view"
+msgstr "View"
+
+msgid "view.extra-large"
+msgstr "Extra large icons"
+
+msgid "view.large"
+msgstr "Large icons"
+
+msgid "view.medium"
+msgstr "Medium icons"
+
+msgid "view.small"
+msgstr "Small icons"
+
+msgid "view.list"
+msgstr "List"
+
+msgid "view.details"
+msgstr "Details"
+
+msgid "view.tiles"
+msgstr "Tiles"
+
+msgid "view.content"
+msgstr "Content"
+
+msgid "menu.details-pane"
+msgstr "Details pane"
+
+msgid "menu.preview-pane"
+msgstr "Preview pane"
+
+msgid "menu.show"
+msgstr "Show"
+
+msgid "menu.nav-pane"
+msgstr "Navigation pane"
+
+msgid "menu.compact"
+msgstr "Compact view"
+
+msgid "menu.check-boxes"
+msgstr "Item check boxes"
+
+msgid "menu.extensions"
+msgstr "File name extensions"
+
+msgid "menu.hidden-items"
+msgstr "Hidden items"
+
+# "See more" menu
+msgid "menu.undo"
+msgstr "Undo"
+
+msgid "menu.undo-named"
+msgstr "Undo {}"
+
+msgid "menu.rename"
+msgstr "Rename"
+
+msgid "menu.pin-home"
+msgstr "Pin to Quick access"
+
+msgid "menu.unpin-home"
+msgstr "Unpin from Quick access"
+
+msgid "menu.zip"
+msgstr "Compress to ZIP file"
+
+msgid "menu.favorites"
+msgstr "Add to favorites"
+
+msgid "menu.copy-path"
+msgstr "Copy path"
+
+msgid "menu.select-all"
+msgstr "Select all"
+
+msgid "menu.select-none"
+msgstr "Select none"
+
+msgid "menu.invert-selection"
+msgstr "Invert selection"
+
+msgid "menu.properties"
+msgstr "Properties"
+
+msgid "menu.options"
+msgstr "Options"
+
+msgid "menu.rotate-left"
+msgstr "Rotate left"
+
+msgid "menu.rotate-right"
+msgstr "Rotate right"
+
+# Context menus
+msgid "context.open"
+msgstr "Open"
+
+msgid "context.open-tab"
+msgstr "Open in new tab"
+
+msgid "context.open-window"
+msgstr "Open in new window"
+
+msgid "context.open-with"
+msgstr "Open with"
+
+msgid "context.store"
+msgstr "Search the Microsoft Store"
+
+msgid "context.other-app"
+msgstr "Choose another app"
+
+msgid "context.background"
+msgstr "Set as desktop background"
+
+msgid "context.run-as-admin"
+msgstr "Run as administrator"
+
+msgid "context.open-location"
+msgstr "Open file location"
+
+msgid "context.pin-start"
+msgstr "Pin to Start"
+
+msgid "context.favorites"
+msgstr "Add to Favorites"
+
+msgid "context.compress"
+msgstr "Compress to..."
+
+msgid "context.compress.zip"
+msgstr "ZIP File"
+
+msgid "context.compress.7z"
+msgstr "7z File"
+
+msgid "context.compress.tar"
+msgstr "TAR File"
+
+msgid "context.compress.options"
+msgstr "Additional options"
+
+msgid "context.copy-as-path"
+msgstr "Copy as path"
+
+msgid "context.more-options"
+msgstr "Show more options"
+
+msgid "context.cut"
+msgstr "Cut"
+
+msgid "context.copy"
+msgstr "Copy"
+
+msgid "context.paste"
+msgstr "Paste"
+
+msgid "context.delete"
+msgstr "Delete"
+
+msgid "context.new-folder"
+msgstr "Folder"
+
+msgid "context.expand-group"
+msgstr "Expand group"
+
+msgid "context.collapse-group"
+msgstr "Collapse group"
+
+msgid "context.expand-all"
+msgstr "Expand all groups"
+
+msgid "context.collapse-all"
+msgstr "Collapse all groups"
+
+msgid "key.right"
+msgstr "Right"
+
+msgid "key.left"
+msgstr "Left"
+
+# Status bar, panes and views
+msgid "count.item"
+msgstr "item"
+
+msgid "count.items"
+msgstr "items"
+
+msgid "count.selected"
+msgstr "item selected"
+
+msgid "count.selected-many"
+msgstr "items selected"
+
+msgid "status.details.tip"
+msgstr "Displays information about each item in the window.  (Ctrl+Shift+6)"
+
+msgid "status.large-icons.tip"
+msgstr "Displays items by using large thumbnails.  (Ctrl+Shift+2)"
+
+msgid "pane.select-one"
+msgstr "Select a single file to get more information and share your cloud content."
+
+msgid "preview.select"
+msgstr "Select a file to preview."
+
+msgid "preview.none"
+msgstr "No preview available."
+
+msgid "preview.failed"
+msgstr "This file can't be previewed."
+
+msgid "empty.search"
+msgstr "No items match your search."
+
+msgid "empty.home"
+msgstr "We'll show your recent files and other content here based on your activity"
+
+msgid "tiles.drives"
+msgstr "Devices and drives"
+
+msgid "tiles.network"
+msgstr "Network locations"
+
+msgid "file.new-text"
+msgstr "New Text Document"
+
+msgid "tab.close"
+msgstr "Close tab"
+
+msgid "tab.close-others"
+msgstr "Close other tabs"
+
+msgid "tab.close-right"
+msgstr "Close tabs to the right"
+
+msgid "tab.duplicate"
+msgstr "Duplicate tab"
+
+msgid "cmd.search-options"
+msgstr "Search options"
+
+msgid "cmd.empty-bin"
+msgstr "Empty Recycle Bin"
+
+msgid "cmd.extract-all"
+msgstr "Extract all"
+
+msgid "cmd.close-search"
+msgstr "Close search"
+
+msgid "nav.show-pc"
+msgstr "Show This PC"
+
+msgid "nav.show-network"
+msgstr "Show Network"
+
+msgid "nav.show-libraries"
+msgstr "Show libraries"
+
+msgid "nav.show-all"
+msgstr "Show all folders"
+
+msgid "nav.expand-current"
+msgstr "Expand to current folder"
+
+msgid "settings.title"
+msgstr "Settings"
+
+msgid "settings.general"
+msgstr "General"
+
+msgid "settings.default.title"
+msgstr "Set as the default file manager"
+
+msgid "settings.default.description"
+msgstr "Open folders, Win+E and folder links from other apps in slint-win-explorer. Turn off to restore File Explorer."
+
+msgid "settings.default.restore"
+msgstr "Restore original associations"
+
+msgid "settings.default.changed"
+msgstr "Some associations were changed outside the app. Restore the original associations before enabling again."
+
+msgid "settings.default.error"
+msgstr "Could not update the default file manager: {}"
+
+
+msgid "settings.default.invalid-backup"
+msgstr "The original association backup is invalid. No unrelated keys were changed."
+
+msgid "settings.default.backup-unavailable"
+msgstr "The app backup folder is unavailable."
+
+msgid "settings.default.active-backup"
+msgstr "Restore the previous registration before enabling again."
+
+msgid "settings.default.busy"
+msgstr "Another app window is updating these settings. Try again."
+
+msgid "settings.default.missing-backup"
+msgstr "The original association backup is missing. The previous values cannot be restored safely."
+
+msgid "settings.default.conflict"
+msgstr "Another program changed an association. Undo that change before restoring the original values."
+
+msgid "settings.default.unsupported-handler"
+msgstr "An existing folder handler is incompatible with this setting."
+
+
+msgid "settings.default.invalid-backup"
+msgstr "The original association backup is invalid. No unrelated keys were changed."
+
+msgid "settings.default.backup-unavailable"
+msgstr "The app backup folder is unavailable."
+
+msgid "settings.default.active-backup"
+msgstr "Restore the previous registration before enabling again."
+
+msgid "settings.default.busy"
+msgstr "Another app window is updating these settings. Try again."
+
+msgid "settings.default.missing-backup"
+msgstr "The original association backup is missing. The previous values cannot be restored safely."
+
+msgid "settings.default.conflict"
+msgstr "Another program changed an association. Undo that change before restoring the original values."
+
+msgid "settings.default.unsupported-handler"
+msgstr "An existing folder handler is incompatible with this setting."
+

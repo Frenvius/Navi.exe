@@ -1,0 +1,414 @@
+// Title bar with tabs over the Mica Alt backdrop. The empty strip area and the caption
+// buttons are hit-tested natively (HTCAPTION / HTMAXBUTTON...), see src/frame.rs.
+import { Theme, Glyphs, Glyph } from "theme.slint";
+import { Shell, TabItem } from "shell.slint";
+import { TipArea } from "tooltip.slint";
+import { KeyboardRing } from "focus.slint";
+
+component Ear inherits Path {
+    in property <bool> left;
+    width: 4px;
+    height: 4px;
+    viewbox-width: 4;
+    viewbox-height: 4;
+    fill: Theme.layer;
+    commands: left ? "M 4 0 L 4 4 L 0 4 A 4 4 0 0 0 4 0 Z" : "M 0 0 A 4 4 0 0 0 4 4 L 0 4 Z";
+}
+
+component SearchBusy inherits Path {
+    width:16px; height:16px;
+    viewbox-width:16; viewbox-height:16;
+    stroke:Theme.dark ? #4cc2ff : Theme.accent; stroke-width:1.5px;
+    property <float> turn: mod(animation-tick(),2s)/2s;
+    property <float> span: 0.01+0.74*abs(sin(180deg*animation-tick()/1.5s));
+    MoveTo {x:8+6.5*sin(root.turn*360deg);y:8-6.5*cos(root.turn*360deg);}
+    ArcTo {radius-x:6.5;radius-y:6.5;x:8+6.5*sin((root.turn+root.span)*360deg);y:8-6.5*cos((root.turn+root.span)*360deg);sweep:true;large-arc:root.span>0.5;}
+}
+
+component SmallButton inherits Rectangle {
+    in property <bool> key-focused;
+    in property <bool> enabled: true;
+    in property <string> glyph;
+    in property <string> tip;
+    in property <length> glyph-size: 12px;
+    // XAML centers some glyphs a pixel to the left of ours.
+    in property <length> glyph-shift;
+    callback clicked();
+    width: 32px;
+    height: 24px;
+    border-radius: 4px;
+    background: touch.pressed ? Theme.subtle-pressed : touch.has-hover ? Theme.subtle-hover : transparent;
+    Glyph {
+        x: (parent.width - self.preferred-width) / 2 + root.glyph-shift;
+        width: self.preferred-width;
+        text: root.glyph;
+        font-size: root.glyph-size;
+        color: touch.pressed ? Theme.text-secondary : Theme.text;
+    }
+    touch := TipArea {
+        enabled: root.enabled;
+        tip: root.tip;
+        clicked => { root.clicked(); }
+    }
+    if root.key-focused: KeyboardRing { x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; }
+}
+
+component Tab inherits Rectangle {
+    in property <bool> key-focused;
+    in property <TabItem> item;
+    in property <bool> selected;
+    in property <bool> after-selected;
+    in property <bool> first;
+    in property <bool> floating;
+    in property <bool> detached-look;
+    in property <bool> reordering;
+    in property <bool> reorder-hover;
+    in property <bool> blocked;
+    property <bool> drag-hover: root.reordering && root.reorder-hover && !root.floating;
+    callback activate();
+    callback pointer(int, length, length);
+    callback close();
+    callback context(length, length);
+
+    height: 32px;
+
+    // Divider between two unselected tabs.
+    if !root.floating && !root.first && !root.selected && !root.after-selected: Rectangle {
+        x: 0;
+        y: 8px;
+        width: 1px;
+        height: 16px;
+        background: Theme.tab-divider;
+    }
+
+    body := Rectangle {
+        x: root.floating ? 9px : root.drag-hover ? 11px : 4px;
+        y: root.floating || root.drag-hover ? 1px : 0px;
+        height: root.floating || root.drag-hover ? 30px : parent.height;
+        width: parent.width - (root.floating ? 10px : root.drag-hover ? 22px : 8px);
+        border-top-left-radius: 8px;
+        border-top-right-radius: 8px;
+        border-bottom-left-radius: root.floating || root.drag-hover ? 8px : 0px;
+        border-bottom-right-radius: root.floating || root.drag-hover ? 8px : 0px;
+        background: root.floating ? Theme.tab-drag : root.drag-hover ? Theme.tab-drag-hover
+            : root.selected ? Theme.layer : !root.reordering && !Shell.file-drag && touch.has-hover ? Theme.subtle-pressed : transparent;
+    }
+    if root.key-focused: KeyboardRing {
+        x: 3px; y: 0px; width: parent.width - 6px; height: parent.height;
+        radius: 8px; flat-bottom: true;
+    }
+
+    if root.selected && !root.floating: Ear {
+        x: 0;
+        y: parent.height - 4px;
+        left: true;
+    }
+    if root.selected && !root.floating: Ear {
+        x: parent.width - 4px;
+        y: parent.height - 4px;
+        left: false;
+    }
+
+    touch := TipArea {
+        enabled: !root.floating && !root.blocked;
+        tip: root.reordering || Shell.file-drag ? "" : root.item.title;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.cancel { root.pointer(3, 0px, 0px); }
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.activate();
+                root.pointer(0, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.left {
+                root.pointer(2, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.middle {
+                root.close();
+            }
+            if e.kind == PointerEventKind.up && e.button == PointerEventButton.right {
+                root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+        moved => {
+            if self.pressed { root.pointer(1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
+        }
+    }
+
+    Image {
+        x: root.floating ? (root.detached-look ? 17px : 16px) : root.drag-hover ? 18px : 13px;
+        y: root.drag-hover ? 9px : 8px;
+        width: 16px;
+        height: 16px;
+        source: root.item.icon;
+        visible:!root.item.settings && !(root.selected && Shell.search-indicator);
+    }
+    if root.item.settings: Glyph {
+        x:root.floating ? 16px : root.drag-hover ? 18px : 13px;
+        y:root.drag-hover?9px:8px;width:16px;height:16px;
+        text:Glyphs.settings;font-size:16px;
+    }
+    if root.selected && Shell.search-indicator: SearchBusy {
+        x:root.floating ? 16px : 13px;y:8px;
+    }
+
+    Text {
+        x: root.floating ? (root.detached-look ? 43px : 42px) : root.drag-hover ? 44px : 39px;
+        y: root.floating && !root.detached-look ? -1px : 0px;
+        width: parent.width - 39px - 36px;
+        height: parent.height;
+        text: root.item.shown;
+        font-family: Theme.font-caption;
+        font-size: 12px;
+        // Unselected tabs' titles are regular and dimmer (#C9C7C7 over the title bar, dark).
+        font-weight: root.selected ? 500 : 400;
+        color: root.selected ? Theme.text : Theme.text-secondary;
+        vertical-alignment: center;
+        overflow: clip;
+    }
+
+    SmallButton {
+        enabled: !root.floating && !root.blocked && !Shell.file-drag;
+        x: parent.width - 4px - 4px - self.width + (root.floating ? (root.detached-look ? 4px : 5px) : root.drag-hover ? -5px : 0px);
+        y: 4px;
+        glyph: Glyphs.cancel;
+        glyph-shift: -1px;
+        tip: @tr("tab.close.tip");
+        clicked => { root.close(); }
+    }
+}
+
+component CaptionButton inherits Rectangle {
+    in property <int> kind; // 1 minimize, 2 maximize, 3 close
+    property <bool> hover: Shell.caption-hover == root.kind;
+    property <bool> pressed: root.hover && Shell.caption-pressed;
+    width: root.kind == 3 ? 46px : 45px;
+    height: 29px;
+    background: root.kind == 3 && root.pressed ? #c42b1ce6
+        : root.kind == 3 && root.hover ? #c42b1c
+        : root.pressed ? Theme.subtle-pressed
+        : root.hover ? Theme.subtle-hover : transparent;
+    animate background { duration: root.hover ? 0ms : 100ms; }
+
+    // XAML centers the minimize and maximize glyphs a pixel left of ours, and the minimize
+    // line on a whole pixel.
+    Glyph {
+        x: round((parent.width - self.preferred-width) / 2 / 1px) * 1px - (root.kind == 3 ? 0px : 1px);
+        y: root.kind == 1 ? 0.5px : 0px;
+        width: self.preferred-width;
+        height: parent.height;
+        font-size: 10px;
+        text: root.kind == 1 ? Glyphs.minimize : root.kind == 3 ? Glyphs.close : Shell.maximized ? Glyphs.restore : Glyphs.maximize;
+        color: root.kind == 3 && root.pressed ? #ffffffb3
+            : root.kind == 3 && root.hover ? #ffffff
+            : root.pressed ? Theme.text-secondary
+            : Shell.active ? Theme.caption-glyph : Theme.caption-glyph-inactive;
+    }
+}
+
+export component TabStrip inherits Rectangle {
+    property <bool> plus-focus;
+    property <int> focus-at;
+    public function focus-tab() { root.plus-focus = false; root.focus-at = Shell.current-tab; scope.focus(); Shell.focus-noted("tab"); }
+    public function focus-new() { root.plus-focus = true; scope.focus(); Shell.focus-noted("new-tab"); }
+    scope := FocusScope {
+        changed has-focus => { if self.has-focus { Shell.focus-noted(root.plus-focus ? "new-tab" : "tab"); } }
+        key-pressed(e) => {
+            if e.text == Key.LeftArrow || e.text == Key.RightArrow {
+                if root.plus-focus { root.focus-tab(); return accept; }
+                let at = max(0,min(Shell.tabs.length - 1,root.focus-at + (e.text == Key.RightArrow ? 1 : -1)));
+                if at != root.focus-at { root.focus-at = at; Shell.tab-selected(at); self.focus(); Shell.focus-noted("tab"); }
+                return accept;
+            }
+            if e.text == Key.Return || e.text == " " {
+                if root.plus-focus { Shell.tab-added(); } else { Shell.tab-selected(root.focus-at); }
+                return accept;
+            }
+            if !root.plus-focus && (e.text == Key.Menu || (e.text == Key.F10 && e.modifiers.shift)) {
+                Shell.tab-context(root.focus-at,root.absolute-position.x + 4px + root.focus-at * root.pitch,root.absolute-position.y + 40px);
+                return accept;
+            }
+            reject
+        }
+    }
+    height: 40px;
+
+    property <length> caption-width: 136px;
+    property <length> available: root.width - 5px - 35px - 48px - root.caption-width;
+    // Tabs are 240px bodies side by side (measured: 16-255, 256-495), each with its 4px ears
+    // reaching over the neighbours'.
+    property <int> tab-count: Shell.tabs.length + (Shell.tab-incoming ? 1 : 0);
+    property <length> tab-width: root.tab-count == 0 ? 248px : max(88px, min(248px, floor((root.available - 8px) / root.tab-count / 1px) * 1px + 8px));
+    property <length> pitch: root.tab-width - 8px;
+    property <length> tabs-end: Shell.native-shell-view ? 0px : 4px + (root.tab-count + (Shell.tab-drop-gap ? 1 : 0)) * root.pitch + 8px + 35px;
+
+    property <int> pressed-tab: -1;
+    property <int> drag-tab <=> Shell.tab-drag;
+    changed drag-tab => {
+        if root.drag-tab < 0 {
+            Shell.tab-transfer(-1,3,0px,0px,false);
+            root.pressed-tab = -1;
+            root.dropping = false;
+            reorder-delay.stop();
+            drop-delay.stop();
+        }
+    }
+    property <int> drop-slot;
+    property <int> shown-slot;
+    property <length> press-x;
+    property <length> press-y;
+    property <length> drag-offset;
+    property <length> drag-offset-y;
+    property <length> pointer-x;
+    property <bool> dropping;
+    callback pointer(int, int, length, length);
+    callback cancel-drag();
+    cancel-drag => {
+        Shell.tab-transfer(-1,3,0px,0px,false);
+        reorder-delay.stop();
+        drop-delay.stop();
+        root.dropping = false;
+        root.pressed-tab = -1;
+        root.drag-tab = -1;
+    }
+    pointer(index, kind, x, y) => {
+        if kind == 0 {
+            root.pressed-tab = index;
+            root.press-x = x;
+            root.press-y = y;
+            root.drag-offset = 0px;
+            root.drag-offset-y = 0px;
+            root.drop-slot = index;
+            root.shown-slot = index;
+            Shell.tab-transfer(index,0,x,y,false);
+        } else if kind == 1 && root.pressed-tab == index {
+            if root.drag-tab < 0 && (abs(x - root.press-x) > 8px || abs(y - root.press-y) > 8px) {
+                root.drag-tab = index;
+            }
+            if root.drag-tab >= 0 {
+                root.drag-offset = x - root.press-x;
+                root.drag-offset-y = y - root.press-y;
+                root.pointer-x = x - root.absolute-position.x;
+                // The pointer, regardless of the grab point, enters the far 20% of
+                // the neighbour before it makes room (448 right / 304 left at 240px).
+                if x >= root.absolute-position.x + 8px + (root.drop-slot + 1.8) * root.pitch {
+                    root.drop-slot = min(Shell.tabs.length - 1, floor((x - root.absolute-position.x - 8px) / root.pitch + 0.2) - 1);
+                } else if x <= root.absolute-position.x + 8px + (root.drop-slot - 0.8) * root.pitch {
+                    root.drop-slot = max(0, ceil((x - root.absolute-position.x - 8px) / root.pitch - 0.2));
+                }
+                if root.drop-slot != root.shown-slot && !reorder-delay.running { reorder-delay.start(); }
+                if root.drop-slot == root.shown-slot { reorder-delay.stop(); }
+                Shell.tab-transfer(index,1,x,y,false);
+            }
+        } else if kind == 3 {
+            root.cancel-drag();
+        } else if kind == 2 && root.pressed-tab == index {
+            if root.drag-tab >= 0 && Shell.tab-transfer(index,2,x,y,root.shown-slot == root.drop-slot && root.shown-slot != index && y >= 8px && y < 40px) {
+                root.cancel-drag();
+                return;
+            }
+            reorder-delay.stop();
+            root.pressed-tab = -1;
+            if root.drag-tab >= 0 {
+                root.dropping = true;
+                drop-delay.start();
+            } else {
+                Shell.tab-transfer(-1,3,0px,0px,false);
+            }
+        }
+    }
+    reorder-delay := Timer {
+        interval: 300ms;
+        triggered => { root.shown-slot = root.drop-slot; self.stop(); }
+    }
+    drop-delay := Timer {
+        interval: 150ms;
+        triggered => {
+            self.stop();
+            // Hide the ghost immediately; Explorer restores the selected body after
+            // about 150ms. The folder's listing and selection never reopen.
+            Shell.tab-reordered(root.drag-tab, root.drop-slot);
+            root.drag-tab = -1;
+        }
+    }
+
+    changed tabs-end => {
+        Shell.caption-layout(root.tabs-end);
+        Shell.tab-drop-layout(root.absolute-position.x + 8px, root.absolute-position.y + 8px, root.pitch);
+    }
+    init => {
+        Shell.caption-layout(root.tabs-end);
+        Shell.tab-drop-layout(root.absolute-position.x + 8px, root.absolute-position.y + 8px, root.pitch);
+    }
+
+    for tab[i] in Shell.native-shell-view ? [] : Shell.tabs: Tab {
+        key-focused: scope.has-focus && !root.plus-focus && root.focus-at == i;
+        property <int> slot: root.drag-tab < 0 ? i
+            : i > root.drag-tab && i <= root.shown-slot ? i - 1
+            : i < root.drag-tab && i >= root.shown-slot ? i + 1 : i;
+        x: 4px + (self.slot + (Shell.tab-incoming && i >= Shell.tab-incoming-slot ? 1 : 0)) * root.pitch;
+        y: 8px;
+        width: root.tab-width;
+        item: tab;
+        first: i == 0;
+        selected: i == Shell.current-tab;
+        after-selected: i == Shell.current-tab + 1;
+        opacity: root.drag-tab == i ? 0 : root.drag-tab >= 0 && !self.reorder-hover ? 0.5 : 1;
+        reordering: root.drag-tab >= 0;
+        blocked: root.dropping;
+        reorder-hover: root.pointer-x >= 8px + self.slot * root.pitch && root.pointer-x < 8px + (self.slot + 1) * root.pitch;
+        activate => { Shell.tab-selected(i); }
+        pointer(kind, x, y) => { root.pointer(i, kind, x, y); }
+        close => { Shell.tab-closed(i); }
+        context(x, y) => { Shell.tab-context(i, x, y); }
+    }
+
+    if root.drag-tab >= 0: Tab {
+        visible: !root.dropping && !Shell.tab-native-ghost;
+        z: 1;
+        x: 4px + root.drag-tab * root.pitch + root.drag-offset;
+        y: 8px + root.drag-offset-y;
+        width: root.tab-width;
+        item: Shell.tabs[root.drag-tab];
+        selected: true;
+        floating: true;
+        reordering: true;
+    }
+
+    SmallButton {
+        visible: !Shell.native-shell-view;
+        key-focused: scope.has-focus && root.plus-focus;
+        x: 4px + (root.tab-count + (Shell.tab-drop-gap ? 1 : 0)) * root.pitch + 8px + 3px;
+        y: 13px;
+        glyph: Glyphs.add;
+        tip: @tr("tab.new.tip");
+        clicked => { Shell.tab-added(); }
+    }
+
+    if Shell.native-shell-view: Rectangle {
+        x:0px;y:0px;width:parent.width - root.caption-width;height:32px;background:Theme.dark ? #202020 : #ffffff;
+        Image{x:8px;y:8px;width:16px;height:16px;source:Shell.tabs[Shell.current-tab].icon;}
+        Text{x:29px;y:0;height:32px;width:parent.width - 40px;font-size:12px;text:Shell.tabs[Shell.current-tab].title;color:Theme.text;vertical-alignment:center;}
+    }
+    // Painted here, but clicks reach them as non-client hits (Snap Layouts on maximize).
+    HorizontalLayout {
+        x: root.width - root.caption-width;
+        y: 0;
+        width: root.caption-width;
+        height: 29px;
+        CaptionButton { kind: 1; }
+        CaptionButton { kind: 2; }
+        CaptionButton { kind: 3; }
+    }
+}
+
+export component TabDragPreview inherits Window {
+    title: "";
+    background: transparent;
+    no-frame: true;
+    always-on-top: true;
+    in property <TabItem> item;
+    in property <length> tab-width: 248px;
+    in property <bool> detached-look;
+    width: root.tab-width;
+    height: 32px;
+    Tab { width: root.tab-width; item: root.item; selected: true; floating: true; detached-look: root.detached-look; reordering: true; blocked: true; }
+}

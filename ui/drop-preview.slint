@@ -1,0 +1,36 @@
+// Explorer's XAML strip draws an 80px picture and the compact forbidden badge over a
+// tab. It extends above the main window, so this is a transparent, click-through popup.
+import { Theme } from "theme.slint";
+
+export component DropPreview inherits Window {
+    in property <image> picture;
+    no-frame: true;
+    background: transparent;
+    width: 80px;
+    height: 80px;
+    Image {
+        width: 80px;
+        height: 80px;
+        source: root.picture;
+    }
+    Rectangle {
+        x: 24px;
+        y: 27px;
+        width: 32px;
+        height: 32px;
+        border-radius: 4px;
+        background: Theme.caption-box;
+        border-width: 1px;
+        border-color: Theme.caption-box-border;
+        Text {
+            width: parent.width;
+            height: parent.height;
+            font-family: Theme.font-icons;
+            font-size: 14px;
+            color: Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: "\u{E733}";
+        }
+    }
+}

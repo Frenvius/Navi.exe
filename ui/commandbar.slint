@@ -1,0 +1,407 @@
+// Command bar (y 88-136): 1px rules above and below a 46px row of app bar buttons.
+import { Theme, Glyphs, Glyph } from "theme.slint";
+import { Shell, Icons } from "shell.slint";
+import { TipArea } from "tooltip.slint";
+import { KeyboardRing } from "focus.slint";
+
+// The visible hover plate is 36px tall, 6px down the 46px hit target and inset `inset`
+// from its sides. Explorer keeps no pressed look while a button's menu is open, but the
+// hover look stays, even with the pointer gone (the menu took it).
+component Plate inherits Rectangle {
+    in property <string> focus-id;
+    in property <bool> enabled: true;
+    in property <bool> menu-button;
+    in property <bool> held;
+    in property <string> tip;
+    in property <length> inset: 2px;
+    out property <bool> hovered: touch.has-hover;
+    callback clicked();
+    height: 46px;
+    property <bool> wants-focus: root.focus-id != "" && Shell.command-focus == root.focus-id;
+    changed wants-focus => { if self.wants-focus { scope.focus(); } }
+    property <int> request: Shell.command-focus-request;
+    changed request => { if root.wants-focus { scope.focus(); } }
+    scope := FocusScope {
+        changed has-focus => { if self.has-focus { Shell.focus-noted(root.focus-id == "details-pane" ? "pane-command" : "commands"); } }
+        key-pressed(e) => {
+            if e.text == Key.RightArrow || e.text == Key.LeftArrow {
+                Shell.command-step(e.text == Key.RightArrow ? 1 : -1);
+                return accept;
+            }
+            if e.text == Key.Return || e.text == " " || (root.menu-button && e.text == Key.DownArrow) {
+                Shell.keyboard-menu = root.menu-button;
+                root.clicked();
+                return accept;
+            }
+            if e.text == Key.Escape { Shell.focus-exit(); return accept; }
+            reject
+        }
+    }
+    Rectangle {
+        x: root.inset;
+        y: 6px;
+        width: parent.width - 2 * root.inset;
+        height: 36px;
+        border-radius: 4px;
+        background: !root.enabled ? transparent : touch.pressed ? Theme.subtle-pressed : (touch.has-hover || root.held) ? Theme.subtle-hover : transparent;
+    }
+    if scope.has-focus: KeyboardRing {
+        x: root.inset - 3px; y: 3px;
+        width: parent.width - 2 * root.inset + 6px; height: 42px;
+    }
+    touch := TipArea {
+        enabled: root.enabled;
+        tip: root.tip;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Command inherits Plate {
+    in property <image> icon;
+    in property <string> id;
+    focus-id: root.id;
+    width: 40px;
+    Image {
+        width: 16px;
+        height: 16px;
+        source: root.icon;
+        opacity: root.enabled ? 1 : 0.36;
+    }
+    clicked => { Shell.command(root.id); }
+}
+
+component Drop inherits Plate {
+    menu-button: true;
+    in property <image> icon;
+    in property <string> label;
+    in property <string> id;
+    focus-id: root.id;
+    // icon, 8px, label, chevron 5px into the next 8px, 12px padding on both sides.
+    // XAML layout rounding: the label takes the whole pixels covering its advances.
+    property <length> label-width: ceil(text.preferred-width / 1px) * 1px;
+    held: Shell.menu-open && Shell.menu-owner == root.id;
+    width: 12px + 16px + 8px + root.label-width + 5px + 8px + 12px;
+    Image {
+        x: 12px;
+        width: 16px;
+        height: 16px;
+        source: root.icon;
+        opacity: root.enabled ? 1 : 0.36;
+    }
+    text := Text {
+        x: 36px;
+        y: 1px;
+        height: parent.height;
+        text: root.label;
+        font-family: Theme.font-small;
+        font-size: 12px;
+        vertical-alignment: center;
+        color: root.enabled ? Theme.text : Theme.text-disabled;
+    }
+    Glyph {
+        x: 36px + root.label-width + 5px;
+        width: 8px;
+        text: Glyphs.chevron-down-med;
+        font-size: 8px;
+        color: root.enabled ? Theme.text : Theme.text-disabled;
+    }
+    clicked => {
+        if Shell.menu-open && Shell.menu-owner == root.id {
+            Shell.menu-dismissed();
+        } else {
+            Shell.open-menu(root.id, self.absolute-position.x + (root.id == "new" ? 0px : self.width / 2), self.absolute-position.y + self.height + 5px);
+        }
+    }
+}
+
+component Separator inherits Rectangle {
+    width: 1px;
+    Rectangle {
+        y: 8px;
+        height: 32px;
+        background: Theme.command-divider;
+    }
+}
+
+export component CommandBar inherits Rectangle {
+    public function focus-first() { Shell.command-edge(false); }
+    public function focus-last() { Shell.command-edge(true); }
+    public function focus-pane() { Shell.command-focus = "details-pane"; Shell.command-focus-request += 1; }
+    height: 48px;
+
+    // Search results' "Fechar pesquisa" shows when there's room for it and "..." with 12px to
+    // spare (11px by these sums) before the pane button, and its separator with 8px more (measured: a 1122px
+    // client shows it, a 1130px one its separator); otherwise it heads "...".
+    property <length> search-right;
+    close-measure := Text {
+        visible: false;
+        text: @tr("cmd.close-search");
+        font-family: Theme.font-small;
+        font-size: 12px;
+    }
+    // (Measured 133px: 2px less after its label than the other buttons.)
+    property <length> close-width: 12px + 16px + 8px + ceil(close-measure.preferred-width / 1px) * 1px + 10px;
+    property <length> close-need: root.search-right + 2px + 6px + root.close-width + 4px + 48px;
+    property <length> pane-left: root.width - 10px - pane-plate.width;
+    property <bool> close-shown: Shell.search-view && root.pane-left - root.close-need >= 11px;
+    property <bool> close-separator: root.pane-left - root.close-need >= 19px;
+    changed close-shown => { Shell.close-search-in-bar = self.close-shown; }
+
+    // Between the edges: the light theme's edges are translucent over Mica.
+    Rectangle {
+        y: 1px;
+        height: parent.height - 2px;
+        background: Theme.content;
+    }
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.line;
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+
+    HorizontalLayout {
+        y: 1px;
+        height: 46px;
+        padding-left: 6px;
+        padding-right: 10px;
+
+        Drop {
+            id: "new";
+            label: @tr("cmd.new");
+            icon: Icons.new-item;
+            enabled: Shell.can-new;
+        }
+        Rectangle { width: 4px; }
+        Separator { }
+        Rectangle { width: 6px; }
+        HorizontalLayout {
+            spacing: 8px;
+            Command {
+                id: "cut";
+                tip: @tr("cmd.cut.tip");
+                icon: Icons.cut;
+                enabled: Shell.can-cut;
+            }
+            Command {
+                id: "copy";
+                tip: @tr("cmd.copy.tip");
+                icon: Icons.copy;
+                enabled: Shell.can-copy;
+            }
+            Command {
+                id: "paste";
+                tip: @tr("cmd.paste.tip");
+                icon: Icons.paste;
+                enabled: Shell.can-paste && Shell.fs-folder;
+            }
+            Command {
+                id: "rename";
+                tip: @tr("cmd.rename.tip");
+                icon: Icons.rename;
+                enabled: Shell.can-rename;
+            }
+            Command {
+                id: "share";
+                tip: @tr("cmd.share");
+                icon: Icons.share;
+                enabled: Shell.can-share;
+            }
+            Command {
+                id: "delete";
+                tip: @tr("cmd.delete.tip");
+                icon: Icons.delete;
+                enabled: Shell.can-delete;
+            }
+        }
+        Rectangle { width: 6px; }
+        Separator { }
+        Rectangle { width: 4px; }
+        Drop {
+            id: "sort";
+            label: @tr("cmd.sort");
+            icon: Icons.sort;
+            enabled: !Shell.home-view && !Shell.gallery-view;
+        }
+        Rectangle { width: 4px; }
+        Drop {
+            id: "view";
+            label: @tr("cmd.view");
+            icon: Shell.view-icon;
+        }
+        if Shell.home-view: Rectangle { width: 4px; }
+        if Shell.home-view: Drop {
+            id: "filter";
+            label: @tr("cmd.filter");
+            icon: Icons.filter;
+        }
+        if Shell.gallery-view: Rectangle {width:4px;}
+        if Shell.gallery-view: Drop {
+            id:"collection";
+            label:Shell.gallery-collection;
+            icon:Shell.gallery-collection-icon;
+        }
+        if !Shell.gallery-view: Rectangle { width: 4px; }
+        if !Shell.gallery-view: Separator { }
+        // Spaced like the wallpaper button.
+        if Shell.search-view: Rectangle { width: 6px; }
+        if Shell.search-view: Drop {
+            id: "search-options";
+            label: @tr("cmd.search-options");
+            icon: Icons.search-options;
+            init => { root.search-right = self.x + self.width; }
+            changed x => { root.search-right = self.x + self.width; }
+            changed width => { root.search-right = self.x + self.width; }
+        }
+        if Shell.search-view: Rectangle { width: 2px; }
+        if root.close-shown: Rectangle { width: 6px; }
+        if root.close-shown: Plate {
+            focus-id: "close-search";
+            width: root.close-width;
+            Image {
+                x: 12px;
+                width: 16px;
+                height: 16px;
+                source: Icons.close-search;
+            }
+            Text {
+                x: 36px;
+                y: 1px;
+                height: parent.height;
+                text: @tr("cmd.close-search");
+                font-family: Theme.font-small;
+                font-size: 12px;
+                vertical-alignment: center;
+                color: Theme.text;
+            }
+            clicked => { Shell.command("close-search"); }
+        }
+        if root.close-shown: Rectangle { width: 4px; }
+        if root.close-shown && root.close-separator: Separator { }
+        if root.close-shown && root.close-separator: Rectangle { width: 4px; }
+        // The Recycle Bin's "Esvaziar Lixeira", placed like "Opções de pesquisa".
+        if Shell.recycle-view: Rectangle { width: 6px; }
+        if Shell.recycle-view: Plate {
+            focus-id: "empty-bin";
+            enabled: Shell.recycle-has-items;
+            width: 12px + 16px + 8px + ceil(empty-bin-label.preferred-width / 1px) * 1px + 12px;
+            Image {
+                x: 12px;
+                width: 16px;
+                height: 16px;
+                source: Icons.recycle-empty;
+                opacity: parent.enabled ? 1 : 0.36;
+            }
+            empty-bin-label := Text {
+                x: 36px;
+                y: 1px;
+                height: parent.height;
+                text: @tr("cmd.empty-bin");
+                font-family: Theme.font-small;
+                font-size: 12px;
+                vertical-alignment: center;
+                color: parent.enabled ? Theme.text : Theme.text-disabled;
+            }
+            clicked => { Shell.command("empty-bin"); }
+        }
+        if Shell.recycle-view: Rectangle { width: 2px; }
+        // Zip files' "Extrair tudo", placed the same way.
+        if Shell.extract-view: Rectangle { width: 6px; }
+        if Shell.extract-view: Plate {
+            focus-id: "extract-all";
+            width: 12px + 16px + 8px + ceil(extract-label.preferred-width / 1px) * 1px + 12px;
+            Image {
+                x: 12px;
+                width: 16px;
+                height: 16px;
+                source: Icons.extract-all;
+            }
+            extract-label := Text {
+                x: 36px;
+                y: 1px;
+                height: parent.height;
+                text: @tr("cmd.extract-all");
+                font-family: Theme.font-small;
+                font-size: 12px;
+                vertical-alignment: center;
+                color: Theme.text;
+            }
+            clicked => { Shell.command("extract-all"); }
+        }
+        if Shell.extract-view: Rectangle { width: 2px; }
+        if Shell.wallpaper: Rectangle { width: 6px; }
+        if Shell.wallpaper: Plate {
+            focus-id: "wallpaper";
+            tip: @tr("cmd.background.tip");
+            width: 12px + 16px + 8px + ceil(wallpaper-label.preferred-width / 1px) * 1px + 12px;
+            Image {
+                x: 12px;
+                width: 16px;
+                height: 16px;
+                source: Icons.wallpaper;
+            }
+            wallpaper-label := Text {
+                x: 36px;
+                y: 1px;
+                height: parent.height;
+                text: @tr("cmd.background");
+                font-family: Theme.font-small;
+                font-size: 12px;
+                vertical-alignment: center;
+                color: Theme.text;
+            }
+            clicked => { Shell.command("wallpaper"); }
+        }
+        if Shell.wallpaper: Rectangle { width: 2px; }
+        more := Plate {
+            menu-button: true;
+            focus-id: "more";
+            width: 48px;
+            inset: 4px;
+            held: Shell.menu-open && Shell.menu-owner == "more";
+            tip: @tr("cmd.see-more.tip");
+            Glyph {
+                y: 2px;
+                width: parent.width;
+                height: parent.height;
+                text: Glyphs.more;
+                // Explorer draws the overflow dots at 20px.
+                font-size: 20px;
+            }
+            clicked => {
+                if Shell.menu-open && Shell.menu-owner == "more" {
+                    Shell.menu-dismissed();
+                } else {
+                    Shell.open-menu("more", self.absolute-position.x + self.width + 2px, self.absolute-position.y + self.height + 2px);
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        pane-plate := Plate {
+            focus-id: "details-pane";
+            tip: Shell.preview-kind ? @tr("cmd.preview-pane.tip") : @tr("cmd.details-pane.tip");
+            width: 12px + 16px + 8px + ceil(details-label.preferred-width / 1px) * 1px + 12px;
+            Image {
+                x: 12px;
+                width: 16px;
+                height: 16px;
+                source: Shell.preview-kind ? Icons.preview-pane : Icons.details-pane;
+            }
+            details-label := Text {
+                x: 36px;
+                y: 1px;
+                height: parent.height;
+                text: Shell.preview-kind ? @tr("cmd.preview") : @tr("cmd.details");
+                font-family: Theme.font-small;
+                font-size: 12px;
+                vertical-alignment: center;
+                color: Theme.text;
+            }
+            clicked => { Shell.command("details-pane"); }
+        }
+    }
+}

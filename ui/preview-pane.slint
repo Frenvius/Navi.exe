@@ -1,0 +1,71 @@
+// Preview pane (Alt+P): the app hosts the file's preview handler over the area, or shows
+// why there is nothing to preview.
+import { Theme } from "theme.slint";
+
+export global PreviewInfo {
+    in property <string> message;
+    // A picture's thumbnail, shown at its own size.
+    in property <image> image;
+    // Where the handler goes, logical pixels in the window.
+    callback geometry(length, length, length, length);
+}
+
+export component PreviewPane inherits Rectangle {
+    background: Theme.content;
+
+    // Splitter, as for the details pane.
+    Rectangle {
+        x: 0;
+        width: 3px;
+        HorizontalLayout {
+            Rectangle { width: 1px; background: Theme.splitter-outer; }
+            Rectangle { width: 1px; background: Theme.splitter-mid; }
+            Rectangle { width: 1px; background: Theme.splitter-outer; }
+        }
+    }
+
+    area := Rectangle {
+        x: 3px;
+        width: parent.width - 3px;
+        background: Theme.preview-pane;
+
+        property <length> left: self.absolute-position.x;
+        property <length> top: self.absolute-position.y;
+        changed left => { PreviewInfo.geometry(self.left, self.top, self.width, self.height); }
+        changed top => { PreviewInfo.geometry(self.left, self.top, self.width, self.height); }
+        changed width => { PreviewInfo.geometry(self.left, self.top, self.width, self.height); }
+        changed height => { PreviewInfo.geometry(self.left, self.top, self.width, self.height); }
+        init => { PreviewInfo.geometry(self.left, self.top, self.width, self.height); }
+
+        // Centered a little right of and above the middle, with a soft shadow.
+        if PreviewInfo.image.width > 0: Rectangle {
+            x: round((parent.width - self.width) / 2px + 5) * 1px;
+            y: round((parent.height - self.height) / 2px - 2.5) * 1px;
+            width: PreviewInfo.image.width * 1px;
+            height: PreviewInfo.image.height * 1px;
+            drop-shadow-offset-x: 3px;
+            drop-shadow-offset-y: 3px;
+            drop-shadow-blur: 5px;
+            drop-shadow-color: #00000059;
+            background: Theme.preview-pane;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: PreviewInfo.image;
+            }
+        }
+
+        // Explorer centers the message 5px below the pane's middle.
+        Text {
+            y: 5px;
+            width: parent.width;
+            height: parent.height;
+            text: PreviewInfo.message;
+            font-family: Theme.font-dui;
+            font-size: 12px;
+            color: Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

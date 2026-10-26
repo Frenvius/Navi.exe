@@ -1,0 +1,574 @@
+// State shared with Rust. Rust owns the data; the UI reports input through callbacks.
+
+import { CloudData } from "cloud.slint";
+export struct TabItem {
+    settings: bool,
+    title: string,
+    // The title as the tab shows it: the glyphs that fit whole (no ellipsis).
+    shown: string,
+    icon: image,
+}
+
+// A details row the list draws: its index in the entries and its top in the content.
+// A name for the icon views to measure, by its row.
+export struct Measure {
+    index: int,
+    name: string,
+}
+
+// A details column after Name: its header text, where it starts past Name (where it's
+// shown, during a column drag), its width,
+// whether its values are right-aligned, and its sort arrow (0 none, 1 up, 2 down).
+export struct ColumnHead {
+    label: string,
+    x: length,
+    width: length,
+    right: bool,
+    sorted: int,
+    // Name, when another column goes first: its text keeps the name's colour.
+    name: bool,
+    folder: bool,
+}
+
+export struct ListSlot {
+    index: int,
+    y: length,
+}
+export struct GalleryTile {
+    row: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    picture: image,
+    selected: bool,
+    name: string,
+}
+export struct GalleryDate { label:string, y:length, }
+export struct EmptyLibraryGroup {
+    label: string,
+    x: length,
+    y: length,
+    width: length,
+    folded: bool,
+}
+
+export struct Crumb {
+    id: string,
+    name: string,
+    icon: image,
+    chevron: bool,
+}
+
+// A property line of a tile or content row ("Tipo" / "Arquivo PNG"); not shown for a
+// placeholder or an empty value.
+// Where a search result's name matches the query (width 0: no match).
+// A value of the header filter: a group of the column ("Hoje", "A – E", a type).
+export struct FilterRow {
+    label: string,
+    checked: bool,
+    // The label's width as DirectWrite lays it out.
+    width: length,
+}
+
+export struct Hit {
+    x: length,
+    width: length,
+}
+
+export struct Field {
+    shown: bool,
+    label: string,
+    value: string,
+    // How wide "label: value" shows (content fields hide when they don't fit).
+    width: length,
+}
+
+export struct Entry {
+    name-style: int,
+    name: string,
+    folder: bool,
+    stacked-collapsed: string,
+    date: string,
+    kind: string,
+    size: string,
+    // Details view: the texts of the columns after the first, and the first's when it isn't
+    // Name (the real lets any column go first; it takes the icon).
+    cells: [string],
+    lead: string,
+    icon: image,
+    selected: bool,
+    ghost: bool,
+    // Tiles (This PC): 48px icon, group (0 devices, 1 network), slot within the group,
+    // used fraction of the drive and the "free of total" line.
+    big-icon: image,
+    // Details view: the header of the group this row starts ("Hoje", "A – E"), or empty.
+    header: string,
+    // Icon views: where that header goes (negative when the view shows none).
+    header-y: length,
+    // Details and icon views: the row is in a collapsed group (hidden); on a header row,
+    // the group is collapsed.
+    folded: bool,
+    collapsed: bool,
+    header-x: length,
+    // Its plate width (negative: the whole view).
+    header-w: length,
+    // Tiles and content: the type (none for folders) and the size as "1,36 KB".
+    kind-tile: string,
+    long-size: string,
+    // Their property lines, from the file type's lists.
+    fields: [Field],
+    hit: Hit,
+    // Its infotip ("Tipo: ..." lines), once asked for.
+    tip: string,
+    group: int,
+    slot: int,
+    usage: float,
+    low: bool,
+    meta: string,
+    // Icon views: the cell rectangle, laid out by Rust.
+    cell-x: length,
+    cell-y: length,
+    cell-w: length,
+    cell-h: length,
+}
+
+export struct NavItem {
+    name: string,
+    icon: image,
+    depth: int,
+    expandable: bool,
+    expanded: bool,
+    pinned: bool,
+    separator: bool,
+    selected: bool,
+    // The blank rows the pane's list starts and ends with.
+    pad: bool,
+}
+
+export struct MenuEntry {
+    key-tip: string,
+    separator: bool,
+    label: string,
+    icon: image,
+    // A Segoe Fluent Icons glyph instead of the icon (the tab menu's).
+    glyph: string,
+    shortcut: string,
+    bullet: bool,
+    checked: bool,
+    submenu: bool,
+    // A submenu that can take a bullet ("Mais", the search's "Data da modificação"): Explorer
+    // draws it 1px further left, with a larger chevron.
+    toggle-submenu: bool,
+    disabled: bool,
+}
+
+export struct MenuButton {
+    key-tip: string,
+    label: string,
+    icon: image,
+    disabled: bool,
+}
+
+// Explorer's own command icons (FileExplorerExtensions assets), loaded at runtime.
+export global Icons {
+    in property <image> tile-multi;
+    in property <image> tile-focused;
+    in property <image> tile-unfocused;
+    in property <image> new-item;
+    in property <image> wallpaper;
+    in property <image> new-folder;
+    in property <image> cut;
+    in property <image> copy;
+    in property <image> paste;
+    in property <image> rename;
+    in property <image> share;
+    in property <image> delete;
+    in property <image> sort;
+    in property <image> view;
+    in property <image> details-pane;
+    in property <image> preview-pane;
+    in property <image> filter;
+    in property <image> search-options;
+    in property <image> recycle-empty;
+    in property <image> extract-all;
+    in property <image> close-search;
+    in property <image> desktop;
+    in property <image> home;
+    in property <image> gallery;
+    in property <image> network;
+    // The navigation pane's theme parts (nine-sliced plates, 16px expando glyphs).
+    in property <image> tree-hot;
+    in property <image> tree-selected;
+    in property <image> tree-hot-selected;
+    in property <image> tree-drop;
+    in property <image> tree-closed;
+    in property <image> tree-open;
+    in property <image> tree-hot-closed;
+    in property <image> tree-hot-open;
+    in property <image> tree-pin;
+    out property <image> none;
+}
+
+export global Shell {
+    in property <bool> settings-view;
+    in property <bool> default-enabled;
+    in property <bool> default-recovery;
+    in property <string> default-error;
+    callback settings-open();
+    callback settings-refresh();
+    callback default-toggle(bool);
+    in property <CloudData> cloud;
+    callback cloud-open(length,length,bool);
+    callback tab-transfer(int, int, length, length, bool) -> bool;
+    in-out property <bool> tab-native-ghost;
+    in-out property <bool> tab-incoming;
+    in-out property <int> tab-incoming-slot;
+    pure callback search-hits(string, string) -> [Hit];
+    in property <bool> lead-folder;
+    in-out property <int> search-hit-stage: 2;
+    // Window
+    in property <bool> active: true;
+    in property <bool> maximized;
+    in property <int> caption-hover;
+    in property <bool> caption-pressed;
+    callback caption-layout(length /* tabs end */);
+    callback minimize();
+    callback toggle-maximize();
+    callback close();
+
+    // Tabs
+    in property <[TabItem]> tabs;
+    in property <int> current-tab;
+    callback tab-selected(int);
+    callback tab-reordered(int, int);
+    in-out property <int> tab-drag: -1;
+    // File drags activate a tab, but the tab header itself rejects the drop.
+    callback tab-drop-layout(length, length, length);
+    in property <bool> file-drag;
+    in property <bool> tab-drop-gap;
+    callback tab-closed(int);
+    // F11: the window covers the screen without its tabs, address and command bars.
+    in property <bool> full-screen;
+    // A tab right-clicked, at this point in the window.
+    callback tab-context(int, length, length);
+    callback tab-added();
+
+    // Navigation row
+    in property <bool> can-back;
+    in property <bool> can-forward;
+    in property <bool> can-up;
+    in property <string> location-name;
+    // The folder up goes to, by name (empty at the top).
+    in property <string> parent-name;
+    // Where Back and Forward go, by name, for their tips.
+    in property <string> back-name;
+    in property <string> forward-name;
+    in property <int> root-kind; // 0 shell icon, 1 desktop, 2 home, 3 gallery, 4 network, 5 this pc
+    in property <image> root-icon;
+    in property <[Crumb]> crumbs;
+    in property <int> hidden-crumbs;
+    in property <string> address-text;
+    in-out property <string> search-text;
+    callback back();
+    callback forward();
+    callback up();
+    callback refresh();
+    callback navigate-crumb(int);
+    callback crumb-menu(int /* -1 root, -2 collapsed */, length, length);
+    // Which address bar dropdown is open (as crumb-menu's index), while a menu is.
+    in property <int> crumb-open: -3;
+    callback crumb-width(int, length);
+    // Where a crumb was laid out (window coordinates), for drops.
+    callback crumb-spot(int, length, length);
+    // The crumb a drag is over.
+    in property <int> crumb-drop: -1;
+    // Over a crumb, the drag's caption (empty: none), its glyph and the pointer.
+    in property <string> drag-caption;
+    in property <string> drag-glyph;
+    in property <length> drag-x;
+    in property <length> drag-y;
+    // The dragged item's 80px picture, which the bar draws under the caption.
+    in property <image> drag-image;
+    callback trail-width(length);
+    callback address-commit(string);
+    // While the address is edited: what it suggests under it, and the one the arrow keys
+    // picked (-1: the text as typed).
+    in-out property <[string]> suggestions;
+    in-out property <int> suggest-index: -1;
+    callback address-edit-started(string);
+    callback address-edited(string);
+    callback suggestion-chosen(int);
+    // Right-clicks in the address bar: on a crumb (the address menu) and on its empty part
+    // (which starts editing, with the text menu).
+    callback address-context(length, length);
+    // Back's (true) or Forward's right-click: the history that way.
+    callback history-menu(bool, length, length);
+    callback address-text-context(length, length);
+    // Rust asks the address field to act: 1 cut, 2 copy, 3 paste, 4 select all, 5 edit.
+    in-out property <int> address-command;
+    callback search-edited(string);
+
+    // Command bar
+    in property <bool> fs-folder;
+    in property <bool> native-shell-view;
+    in property <string> native-search-scope;
+    callback native-viewport(length,length,length,length);
+    callback native-view-focus();
+    in property <image> native-location-icon;
+    in property <bool> gallery-view;
+    in property <[GalleryTile]> gallery-tiles;
+    in property <[GalleryDate]> gallery-dates;
+    in property <string> gallery-heading;
+    in property <string> gallery-collection;
+    in property <image> gallery-collection-icon;
+    in property <length> gallery-indicator;
+    callback gallery-viewport(length,length);
+    callback gallery-scrub(length,bool);
+    callback gallery-scroll(length);
+    pure callback gallery-date-at(length) -> string;
+    in property <bool> can-new;
+    in property <bool> fs-selection;
+    in property <bool> can-cut;
+    in property <bool> can-copy;
+    in property <bool> can-rename;
+    in property <bool> can-delete;
+    in property <bool> can-share;
+    in property <bool> single-selection;
+    // A single image is selected: Explorer shows its contextual "Definir como fundo de tela".
+    in property <bool> wallpaper;
+    in property <bool> can-paste;
+    in property <bool> details-pane;
+    in property <bool> preview-pane;
+    in property <string> network-notice;
+    callback network-settings();
+    // The pane the command bar toggles: the last one shown (details or preview).
+    in property <bool> preview-kind;
+    in property <image> view-icon;
+    callback command(string);
+    callback open-menu(string, length, length);
+    in-out property <bool> keyboard-menu;
+    in-out property <string> command-focus;
+    in-out property <string> focus-zone: "list";
+    in-out property <string> nav-focus;
+    in-out property <int> nav-focus-request;
+    in-out property <int> command-focus-request;
+    callback focus-noted(string);
+    callback focus-step(bool, bool);
+    callback focus-exit();
+    callback command-step(int);
+    callback command-edge(bool);
+    in property <string> menu-owner;
+
+    // Navigation pane
+    in property <[NavItem]> nav;
+    in property <length> sidebar-width: 196px;
+    callback nav-clicked(int);
+    callback nav-toggled(int);
+    callback nav-middle(int);
+    callback nav-context(int, length, length);
+    // A key in the tree; true when it was handled.
+    callback nav-key(KeyEvent) -> bool;
+    in-out property <bool> nav-focused;
+    in-out property <length> nav-scroll-y;
+    // A scroll position Rust asked for while rows were being added (-1: none).
+    in-out property <length> nav-scroll-want: -1px;
+    in-out property <length> nav-page;
+    // The tree's bar: its carets (rows), its track (pages), its thumb dragged.
+    callback nav-lines(int);
+    callback nav-pages(int);
+    callback nav-dragged();
+    callback nav-drag-start(int);
+    // The row a drag is over.
+    in property <int> nav-drop-row: -1;
+    in property <length> nav-insert-y: -1px;
+    callback sidebar-resized(length);
+
+    // Folder view
+    in property <[Entry]> entries;
+    in property <int> view-mode: 6;
+    in property <int> focused-row: -1;
+    // The group header with keyboard focus (by its first row), after clicking it.
+    in property <int> focused-group: -1;
+    in property <int> renaming-row: -1;
+    in property <string> rename-seed;
+    in property <int> rename-select-end;
+    in property <string> empty-text;
+    in property <string> error-text;
+    // The details view's first column when it isn't Name (empty for Name), and its sort
+    // arrow (1 up, 2 down).
+    in property <string> lead-label;
+    in property <bool> lead-right;
+    in property <int> name-column;
+    in property <length> name-column-x;
+    in property <length> name-column-width: 272px;
+    in property <int> lead-sorted;
+    in property <bool> sort-descending;
+    // Rows come in groups ("Agrupar por").
+    in property <bool> grouped;
+    // "Caixas de seleção de item", and whether every item is selected (the header's box).
+    in property <bool> check-boxes;
+    // "Exibição compacta": 21px rows (else 28px, with a 24px highlight).
+    in property <bool> compact: true;
+    in property <bool> all-selected;
+    // Several items selected: each gets the accent border on a lighter plate.
+    in property <bool> multi-selected;
+    callback row-check(int);
+    callback check-all(bool);
+    in-out property <length> col-name: 272px;
+    // The columns after Name, and their total width. Dragging one's edge reports its new
+    // width (-1 for Name, whose width the UI sets), double-clicking it asks to size it to
+    // fit (0 is Name); a right click on the
+    // header asks for its menu (with the column clicked, -1 past the last).
+    in property <[ColumnHead]> columns;
+    in property <length> columns-width;
+    callback column-resized(int, length);
+    callback column-fit(int);
+    callback header-context(int, length, length);
+    // A header cell pressed (phase 0), moved (1) or released (2), at x in the header's
+    // content. Past the drag threshold it's a column drag: the dragged column (0 the first)
+    // follows the mouse at `header-drag-x`, pressed while over its new slot, and the others
+    // slide (`lead-x` and the columns' x) to show where it lands.
+    callback header-pointer(int, int, length);
+    in property <int> header-drag: -1;
+    // The header's filter (its chevron): the column it's open for, where (in the window),
+    // its values, the system's stack icon by them, and the row lit (hovered, first at first).
+    // A check box adds or removes a value; a label filters by it alone and closes.
+    in property <int> filter-column: -1;
+    // Its cell is framed until the view reloads under a new filter (the filter stays open).
+    in property <bool> filter-framed;
+    in property <length> filter-x;
+    in property <length> filter-y;
+    in property <[FilterRow]> filter-rows;
+    in property <image> filter-icon;
+    in-out property <int> filter-hot;
+    callback header-filter(int, length, length);
+    callback filter-toggle(int);
+    callback filter-only(int);
+    callback filter-dismissed();
+    in property <length> header-drag-x;
+    in property <bool> header-drag-over;
+    in property <length> lead-x;
+    in-out property <length> list-scroll-y;
+    in-out property <length> list-scroll-x;
+    // The list view scrolls sideways; its scrollbar counts columns (48px each, so a caret
+    // steps one), with as many as the list has when they overflow.
+    in-out property <length> grid-scroll-x;
+    in property <int> grid-column-count;
+    in-out property <length> grid-column-value;
+    callback grid-column-scrolled();
+    callback grid-scrolled();
+    in-out property <bool> list-focused;
+    callback sort-clicked(int);
+    callback row-pointer(int, PointerEvent);
+    in property <bool> single-click;
+    in property <bool> underline-hover-only: true;
+    callback row-hover(int, bool, length, length);
+    pure callback underline-widths(string, length, length) -> [length];
+    pure callback tile-label(string, length) -> string;
+    callback row-double-clicked(int);
+    // A group header clicked (by its first row): selects the group's items.
+    callback group-clicked(int, bool);
+    callback group-toggled(int);
+    callback group-context(int, length, length);
+    // The pointer rests on an item: Rust fills its tip.
+    callback item-hovered(int);
+    // The row whose tip shows under it: the keyboard's focus, a while after it moved there.
+    in property <int> key-tip-row: -1;
+    // The keyboard asks for a context menu (Shift+F10, the menu key): the shown view opens
+    // this row's at its icon, or with -2 the folder's at its own corner, and sets it back to -1.
+    in-out property <int> key-menu-row: -1;
+    // Its menu (row -1: the folder's) at that point. Rust opens it after the change handler
+    // that calls this, which can't show a window.
+    callback key-menu(int, length, length);
+    callback background-pointer(PointerEvent);
+    callback band-changed(length, length, length, length, bool, bool);
+    callback list-key(KeyEvent) -> bool;
+    callback list-context(int, length, length, bool);
+    callback rename-finished(bool, string);
+    callback list-viewport(length);
+    // The details list draws only the rows near its shown part (Rust picks them as it
+    // scrolls), in a content this tall. Its scrollbar steps by rows: lines (positive
+    // down) for the arrows, pages for the track.
+    in property <[ListSlot]> list-rows;
+    in property <[EmptyLibraryGroup]> empty-library-groups;
+    callback library-empty-toggled(string);
+    in property <length> list-extent;
+    callback list-scrolled();
+    callback list-lines(int);
+    callback list-pages(int);
+    // Scrolls the shown view by pixels (positive: down): a band held at its edge.
+    callback list-nudge(length);
+    // Drag and drop: the row a drag is over, and drags started from a selected item.
+    in property <int> drop-row: -1;
+    callback drag-start();
+    in property <[int]> group-counts;
+    in property <bool> drives-view;
+    // Icon views (1 extra large, 2 large, 3 medium).
+    in property <bool> icons-view;
+    in property <length> icon-size: 96px;
+    in property <int> grid-kind;
+    in property <length> grid-width;
+    in property <length> grid-height;
+    callback grid-viewport(length, length);
+    // The icon views draw only the cells near their shown part (Rust picks them as they
+    // scroll) and every group header. The names Rust has not measured yet (for the rows'
+    // heights: wrapped to the label width; for the list's columns: on one line) are laid
+    // out apart as bare texts, which report back once.
+    in property <[int]> grid-slots;
+    in property <[int]> grid-heads;
+    in property <length> grid-label-width;
+    in property <[Measure]> grid-measure;
+    in property <bool> grid-measure-wrap;
+    in property <bool> grid-list;
+    callback name-measured(string, length, int);
+    callback header-width(int, length);
+    // Home ("Início") has no column header, no sorting and a Filter dropdown.
+    in property <bool> home-view;
+    // Search results: the command bar offers "Opções de pesquisa".
+    in property <bool> search-view;
+    in property <bool> search-busy;
+    in property <bool> search-indicator;
+    // The Recycle Bin: the command bar offers "Esvaziar Lixeira" (while it has items).
+    in property <bool> recycle-view;
+    in property <bool> recycle-has-items;
+    // Zip files are selected: the command bar offers "Extrair tudo".
+    in property <bool> extract-view;
+    // "Fechar pesquisa" fits in the command bar (else "..." has it).
+    in-out property <bool> close-search-in-bar;
+    callback grid-columns(int);
+    callback drives-viewport(length, length);
+    callback drives-thumb(length);
+    in property <length> drives-device-height;
+    in property <bool> drives-devices-collapsed;
+    in property <bool> drives-network-collapsed;
+    in-out property <length> drives-scroll-units;
+    in property <length> drives-scroll-extent;
+    in property <length> drives-scroll-page;
+
+    // Status bar
+    in property <string> status-count;
+    in property <bool> status-bar: true;
+    pure callback group-title(string) -> string;
+    pure callback group-subtitle(string) -> string;
+    in property <string> status-selection;
+    in property <string> status-size;
+
+    // Menus
+    in property <bool> menu-open;
+    // Menus normally open as popup windows; the in-window layer is the fallback.
+    in property <bool> menu-inline;
+    in property <length> menu-x;
+    in property <length> menu-y;
+    in property <length> menu-flip-x;
+    in property <[MenuEntry]> menu-items;
+    in property <[MenuButton]> menu-buttons;
+    in property <bool> menu-buttons-bottom;
+    in property <bool> sub-open;
+    in property <int> sub-parent: -1;
+    in property <[MenuEntry]> sub-items;
+    callback menu-activated(int, int);
+    callback menu-button(int);
+    callback menu-hover(int, int);
+    callback menu-dismissed();
+}

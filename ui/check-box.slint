@@ -1,0 +1,21 @@
+import { Theme, Glyphs, Glyph } from "theme.slint";
+
+// "Caixas de seleção de item": a 13px box, light when clear, accent with a check when set.
+export component CheckBox inherits Rectangle {
+    in property <bool> checked;
+    callback toggled();
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    border-width: root.checked ? 0px : 1px;
+    border-color: Theme.check-border;
+    background: root.checked ? Theme.check-on : Theme.check-off;
+    if root.checked: Glyph {
+        text: Glyphs.check;
+        font-size: 10px;
+        color: Theme.check-mark;
+    }
+    TouchArea {
+        clicked => { root.toggled(); }
+    }
+}

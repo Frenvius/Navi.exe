@@ -1,0 +1,461 @@
+# Brazilian Portuguese for slint-win-explorer. The msgids are the keys the code uses; both Slint's
+# @tr() (bundled at build time) and src/i18n.rs read this file. Strings the shell has
+# itself (group names, default names, "free of") come from its resources instead.
+# Measured on the real Explorer, or read from Windows' pt-BR resources (tools/winstr.py).
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: pt_BR\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+# Window and tabs
+msgid "app.title"
+msgstr "Explorador de Arquivos"
+
+msgid "tab.close.tip"
+msgstr "Fechar guia (Ctrl+W)"
+
+msgid "tab.new.tip"
+msgstr "Adicionar nova guia (Ctrl+T)"
+
+# Address bar
+msgid "nav.back.tip"
+msgstr "Voltar para {}"
+
+msgid "nav.forward.tip"
+msgstr "Avançar para {}"
+
+msgid "nav.up-to.tip"
+msgstr "Até \"{}\" (Alt + Seta para Cima)"
+
+msgid "nav.up.tip"
+msgstr "Até um nível (Alt + Seta para Cima)"
+
+msgid "nav.refresh.tip"
+msgstr "Atualizar \"{}\" (F5)"
+
+msgid "nav.search"
+msgstr "Pesquisar em {}"
+
+msgid "address.copy"
+msgstr "Copiar Endereço"
+
+msgid "address.copy-text"
+msgstr "Copiar Endereço como Texto"
+
+msgid "address.edit"
+msgstr "Editar Endereço"
+
+msgid "address.delete-history"
+msgstr "Excluir Histórico"
+
+msgid "address.select-all"
+msgstr "Selecionar Tudo"
+
+# Command bar
+msgid "cmd.new"
+msgstr "Novo"
+
+msgid "cmd.cut.tip"
+msgstr "Recortar"
+
+msgid "cmd.copy.tip"
+msgstr "Copiar"
+
+msgid "cmd.paste.tip"
+msgstr "Colar"
+
+msgid "cmd.rename.tip"
+msgstr "Renomear"
+
+msgid "cmd.share"
+msgstr "Compartilhar"
+
+msgid "cmd.delete.tip"
+msgstr "Excluir"
+
+msgid "cmd.sort"
+msgstr "Classificar"
+
+msgid "cmd.view"
+msgstr "Visualizar"
+
+msgid "cmd.preview"
+msgstr "Visualizar"
+
+msgid "cmd.filter"
+msgstr "Filtro"
+
+msgid "cmd.background.tip"
+msgstr "Definir a imagem selecionada como a tela de fundo da área de trabalho."
+
+msgid "cmd.background"
+msgstr "Definir como fundo de tela"
+
+msgid "cmd.see-more.tip"
+msgstr "Ver mais"
+
+msgid "cmd.preview-pane.tip"
+msgstr "Mostrar ou ocultar o painel de visualização."
+
+msgid "cmd.details-pane.tip"
+msgstr "Mostrar ou ocultar o painel de detalhes."
+
+msgid "cmd.details"
+msgstr "Detalhes"
+
+# Columns and properties
+msgid "column.name"
+msgstr "Nome"
+
+msgid "column.modified"
+msgstr "Data de modificação"
+
+msgid "column.modified.group"
+msgstr "Data da modificação"
+
+msgid "column.type"
+msgstr "Tipo"
+
+msgid "column.size"
+msgstr "Tamanho"
+
+msgid "column.location"
+msgstr "Local do arquivo"
+
+# Sort and group menus
+msgid "menu.more"
+msgstr "Mais"
+
+msgid "menu.more-columns"
+msgstr "Mais..."
+
+msgid "menu.ascending"
+msgstr "Ordem Crescente"
+
+msgid "menu.descending"
+msgstr "Ordem Decrescente"
+
+msgid "menu.group-by"
+msgstr "Agrupar por"
+
+msgid "menu.sort-by"
+msgstr "Classificar por"
+
+msgid "menu.group-none"
+msgstr "(Nenhum)"
+
+# View menu
+msgid "menu.view"
+msgstr "Exibir"
+
+msgid "view.extra-large"
+msgstr "Ícones extra grandes"
+
+msgid "view.large"
+msgstr "Ícones grandes"
+
+msgid "view.medium"
+msgstr "Ícones médios"
+
+msgid "view.small"
+msgstr "Ícones pequenos"
+
+msgid "view.list"
+msgstr "Lista"
+
+msgid "view.details"
+msgstr "Detalhes"
+
+msgid "view.tiles"
+msgstr "Blocos"
+
+msgid "view.content"
+msgstr "Conteúdo"
+
+msgid "menu.details-pane"
+msgstr "Painel de detalhes"
+
+msgid "menu.preview-pane"
+msgstr "Painel de visualização"
+
+msgid "menu.show"
+msgstr "Mostrar"
+
+msgid "menu.nav-pane"
+msgstr "Painel de navegação"
+
+msgid "menu.compact"
+msgstr "Exibição compacta"
+
+msgid "menu.check-boxes"
+msgstr "Caixas de seleção de item"
+
+msgid "menu.extensions"
+msgstr "Extensões de nomes de arquivos"
+
+msgid "menu.hidden-items"
+msgstr "Itens ocultos"
+
+# "See more" menu
+msgid "menu.undo"
+msgstr "Desfazer"
+
+msgid "menu.undo-named"
+msgstr "Desfazer {}"
+
+msgid "menu.rename"
+msgstr "Renomear"
+
+msgid "menu.pin-home"
+msgstr "Fixar no Acesso rápido"
+
+msgid "menu.unpin-home"
+msgstr "Desafixar do Acesso rápido"
+
+msgid "menu.zip"
+msgstr "Compactar para arquivo ZIP"
+
+msgid "menu.favorites"
+msgstr "Adicionar a favoritos"
+
+msgid "menu.copy-path"
+msgstr "Copiar caminho"
+
+msgid "menu.select-all"
+msgstr "Selecionar tudo"
+
+msgid "menu.select-none"
+msgstr "Limpar seleção"
+
+msgid "menu.invert-selection"
+msgstr "Inverter seleção"
+
+msgid "menu.properties"
+msgstr "Propriedades"
+
+msgid "menu.options"
+msgstr "Opções"
+
+msgid "menu.rotate-left"
+msgstr "Girar para a esquerda"
+
+msgid "menu.rotate-right"
+msgstr "Girar para a direita"
+
+# Context menus
+msgid "context.open"
+msgstr "Abrir"
+
+msgid "context.open-tab"
+msgstr "Abrir em nova guia"
+
+msgid "context.open-window"
+msgstr "Abrir em nova janela"
+
+msgid "context.open-with"
+msgstr "Abrir com"
+
+msgid "context.store"
+msgstr "Procurar na Microsoft Store"
+
+msgid "context.other-app"
+msgstr "Escolher outro aplicativo"
+
+msgid "context.background"
+msgstr "Definir como fundo da área de trabalho"
+
+msgid "context.run-as-admin"
+msgstr "Executar como administrador"
+
+msgid "context.open-location"
+msgstr "Abrir local do arquivo"
+
+msgid "context.pin-start"
+msgstr "Fixar em Iniciar"
+
+msgid "context.favorites"
+msgstr "Adicionar aos Favoritos"
+
+msgid "context.compress"
+msgstr "Compactar para..."
+
+msgid "context.compress.zip"
+msgstr "Arquivo ZIP"
+
+msgid "context.compress.7z"
+msgstr "Arquivo 7z"
+
+msgid "context.compress.tar"
+msgstr "Arquivo TAR"
+
+msgid "context.compress.options"
+msgstr "Opções adicionais"
+
+msgid "context.copy-as-path"
+msgstr "Copiar como caminho"
+
+msgid "context.more-options"
+msgstr "Mostrar mais opções"
+
+msgid "context.cut"
+msgstr "Recortar"
+
+msgid "context.copy"
+msgstr "Copiar"
+
+msgid "context.paste"
+msgstr "Colar"
+
+msgid "context.delete"
+msgstr "Excluir"
+
+msgid "context.new-folder"
+msgstr "Pasta"
+
+msgid "context.expand-group"
+msgstr "Expandir grupo"
+
+msgid "context.collapse-group"
+msgstr "Recolher grupo"
+
+msgid "context.expand-all"
+msgstr "Expandir todos os grupos"
+
+msgid "context.collapse-all"
+msgstr "Recolher todos os grupos"
+
+msgid "key.right"
+msgstr "Direita"
+
+msgid "key.left"
+msgstr "Esquerda"
+
+# Status bar, panes and views
+msgid "count.item"
+msgstr "item"
+
+msgid "count.items"
+msgstr "itens"
+
+msgid "count.selected"
+msgstr "item selecionado"
+
+msgid "count.selected-many"
+msgstr "itens selecionados"
+
+msgid "status.details.tip"
+msgstr "Exibe informações sobre cada item na janela.  (Ctrl+Shift+6)"
+
+msgid "status.large-icons.tip"
+msgstr "Exibe itens usando miniaturas grandes.  (Ctrl+Shift+2)"
+
+msgid "pane.select-one"
+msgstr "Selecione um único arquivo para obter mais informações e compartilhar seu conteúdo de nuvem."
+
+msgid "preview.select"
+msgstr "Selecione um arquivo para visualizar."
+
+msgid "preview.none"
+msgstr "Nenhuma visualização disponível."
+
+msgid "preview.failed"
+msgstr "Este arquivo não pode ser visualizado."
+
+msgid "empty.search"
+msgstr "Nenhum item corresponde à pesquisa."
+
+msgid "empty.home"
+msgstr "Mostraremos seus arquivos recentes e outros conteúdos aqui com base em sua atividade"
+
+msgid "tiles.drives"
+msgstr "Dispositivos e unidades"
+
+msgid "tiles.network"
+msgstr "Locais de rede"
+
+msgid "file.new-text"
+msgstr "Novo Documento de Texto"
+
+msgid "tab.close"
+msgstr "Fechar guia"
+
+msgid "tab.close-others"
+msgstr "Fechar outras guias"
+
+msgid "tab.close-right"
+msgstr "Fechar guias à direita"
+
+msgid "tab.duplicate"
+msgstr "Duplicar guia"
+
+msgid "cmd.search-options"
+msgstr "Opções de pesquisa"
+
+msgid "cmd.empty-bin"
+msgstr "Esvaziar Lixeira"
+
+msgid "cmd.extract-all"
+msgstr "Extrair tudo"
+
+msgid "cmd.close-search"
+msgstr "Fechar pesquisa"
+
+msgid "nav.show-pc"
+msgstr "Mostrar Este PC"
+
+msgid "nav.show-network"
+msgstr "Mostrar Rede"
+
+msgid "nav.show-libraries"
+msgstr "Mostrar bibliotecas"
+
+msgid "nav.show-all"
+msgstr "Expandir todas as pastas"
+
+msgid "nav.expand-current"
+msgstr "Expandir para pasta atual"
+
+msgid "settings.title"
+msgstr "Configurações"
+
+msgid "settings.general"
+msgstr "Geral"
+
+msgid "settings.default.title"
+msgstr "Definir como gerenciador de arquivos padrão"
+
+msgid "settings.default.description"
+msgstr "Abre pastas, Win+E e links de pastas de outros apps no slint-win-explorer. Desligue para restaurar o Explorer."
+
+msgid "settings.default.restore"
+msgstr "Restaurar associações originais"
+
+msgid "settings.default.changed"
+msgstr "Algumas associações foram alteradas fora do app. Restaure as associações originais antes de ligar novamente."
+
+msgid "settings.default.error"
+msgstr "Não foi possível atualizar o gerenciador padrão: {}"
+
+
+msgid "settings.default.invalid-backup"
+msgstr "O backup das associações originais é inválido. Nenhuma chave fora do escopo foi alterada."
+
+msgid "settings.default.backup-unavailable"
+msgstr "A pasta de backup do app está indisponível."
+
+msgid "settings.default.active-backup"
+msgstr "Restaure o registro anterior antes de ligar novamente."
+
+msgid "settings.default.busy"
+msgstr "Outra janela do app está atualizando estas configurações. Tente novamente."
+
+msgid "settings.default.missing-backup"
+msgstr "O backup das associações originais não foi encontrado. Não é possível restaurar os valores anteriores com segurança."
+
+msgid "settings.default.conflict"
+msgstr "Outro programa alterou uma associação. Desfaça essa alteração antes de restaurar os valores originais."
+
+msgid "settings.default.unsupported-handler"
+msgstr "Um manipulador de pastas existente é incompatível com esta configuração."
+

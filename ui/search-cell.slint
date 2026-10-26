@@ -1,0 +1,47 @@
+import { Shell } from "shell.slint";
+import { Theme } from "theme.slint";
+import { Underlines } from "underline.slint";
+
+// The details view's search boxes are 16px tall around a 12px DirectUI label.
+export component SearchCell inherits Rectangle {
+    in property <string> text;
+    in property <color> ink;
+    in property <bool> mark;
+    in property <bool> align-right;
+    in property <bool> underline;
+    for hit in root.mark && Shell.search-view ? Shell.search-hits(root.text,Shell.search-text) : []: Rectangle {
+        x: hit.x - 2px;
+        y: 3px;
+        width: max(0px,min(hit.width + 4px,root.width - self.x));
+        visible: hit.x < root.width;
+        height: 16px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: Shell.search-hit-stage == 2 ? Theme.hit-border : Theme.hit-idle-border;
+        background: Shell.search-hit-stage == 2 ? Theme.hit : Shell.search-hit-stage == 1 ? Theme.hit-pulse : Theme.hit-idle;
+        animate border-color { duration: Shell.search-hit-stage == 2 ? 1500ms : 0ms; easing: linear; }
+        animate background { duration: Shell.search-hit-stage == 2 ? 1500ms : 0ms; easing: linear; }
+    }
+    Text {
+        x: 0px;
+        y: 0px;
+        // DirectUI fits the complete value inclusively, but an elided prefix plus
+        // ellipsis must end strictly before the right edge (99+9 ==108 does not fit).
+        width: root.width - (self.preferred-width > root.width ? 1px : 0px);
+        height: root.height;
+        text: root.text;
+        color: root.ink;
+        font-family: Theme.font-dui;
+        font-size: 12px;
+        vertical-alignment: center;
+        horizontal-alignment: root.align-right ? right : left;
+        overflow: elide;
+    }
+    if root.underline: Underlines {
+        width: parent.width;
+        text: root.text;
+        ink: root.ink;
+        align: root.align-right ? 2 : 0;
+        baseline: floor((root.height - 15px) / 2px) * 1px + 14px;
+    }
+}

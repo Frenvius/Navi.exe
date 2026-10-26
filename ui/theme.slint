@@ -1,0 +1,217 @@
+// File Explorer (Windows 11) colors and fonts for the dark and light themes, sampled from
+// explorer.exe at 100%. Rust sets `dark` from the system theme and flips it live.
+
+export global Theme {
+    in property <bool> dark: true;
+    out property <color> compressed-text: dark ? #3a99e8 : #0000ff;
+    out property <color> encrypted-text: dark ? #00ff00 : #008000;
+
+    // DirectUI surfaces (the items view, tree, status bar and panes)
+    out property <color> content: dark ? #191919 : #ffffff;
+    // Under the command bar's edges the light theme lets Mica show through, darkened.
+    out property <color> line: dark ? #3a3a3a : #00000014;
+    out property <color> separator: dark ? #383838 : #d6d6d6;
+    out property <color> content-line: dark ? #2b2b2b : #f0f0f0;
+    out property <color> status: dark ? #1c1c1c : #ffffff;
+    // The 1px divider after the status bar's item count.
+    out property <color> status-divider: dark ? #f7f7f7 : #f7f7f7;
+    // The status bar's view toggle that is on.
+    // The status bar's view toggle that's on (dark measured 2026-10-24 on an active window).
+    out property <color> toggle-on: dark ? #4d4d4d : #e5f3fb;
+    out property <color> toggle-on-border: dark ? #636363 : #0078d4;
+    out property <color> toggle-hover-border: dark ? #c3c3c3 : #02090d;
+    out property <color> toggle-focus: dark ? #666666 : #cbe8f6;
+    // The nav pane's 2px left edge, and the 4px (nav) and 3px (panes) splitters.
+    out property <color> pane-edge: dark ? #131313 : #ffffff;
+    out property <color> splitter-outer: dark ? #202020 : #ffffff;
+    out property <color> splitter-mid: dark ? #2b2b2b : #f7f7f7;
+    out property <color> pane: dark ? #222222 : #f9f9f9;
+    out property <color> preview-pane: dark ? #202020 : #f9f9f9;
+    out property <color> row-hover: dark ? #4d4d4d : #e5f3ff;
+    out property <color> row-selected: dark ? #505050 : #cce8ff;
+    out property <color> row-selected-hover: dark ? #646464 : #cce8ff;
+    out property <color> row-multi: dark ? #626262 : #cce8ff;
+    // DirectUI draws this border in a fixed blue, not the accent palette.
+    out property <color> row-multi-border: dark ? #60cdff : #0078d4;
+    out property <color> focus-rect: dark ? #c3c3c3 : #000000;
+    // A This PC tile's frame while hovered or selected without the focus.
+    out property <color> tile-border: dark ? #2a2a2a : transparent;
+    out property <color> nav-selected: dark ? #333333 : #d9d9d9;
+    out property <color> nav-selected-border: dark ? transparent : #949494;
+    out property <color> nav-selected-hover: dark ? #3d3d3d : #d9d9d9;
+    out property <color> nav-hover: dark ? #2d2d2d : #e5f3ff;
+    out property <color> header-text: dark ? #dedede : #4c607a;
+    // The details view's columns after the name.
+    out property <color> cell-text: dark ? #dedede : #6d6d6d;
+    // A search's match in a name (light not measured yet).
+    out property <color> hit: dark ? #5e5e11 : #fff8b0;
+    out property <color> hit-border: dark ? #fffd00 : #e8d000;
+    out property <color> hit-idle: dark ? #a3890a : #fff8b0;
+    out property <color> hit-idle-border: dark ? #ffab00 : #e8d000;
+    out property <color> hit-pulse: dark ? #bea407 : #fff8b0;
+    out property <color> header-hover: dark ? #434343 : #d9ebf9;
+    out property <color> header-pressed: dark ? #838383 : #bcdcf4;
+    // A lit header cell's filter part: its divider, 16px from the right, and chevron.
+    out property <color> header-chevron-divider: dark ? #565656 : #c3d3e0;
+    // Peaks of the drawn chevron (its crisp arm).
+    out property <color> header-chevron: dark ? #bbbbbb : #474a4b;
+    out property <color> header-chevron-pressed: dark ? #e8e8e8 : #000000;
+    // A header cell while its filter is open: framed, its chevron's divider darker (dark
+    // measured 2026-10-24; light not yet).
+    out property <color> header-open: dark ? #2c2c2c : #cce8ff;
+    out property <color> header-open-border: dark ? #acacac : #99d1ff;
+    out property <color> header-open-divider: dark ? #424242 : #99d1ff;
+    out property <color> header-open-chevron: dark ? #e5e5e5 : #000000;
+    out property <color> header-divider: dark ? #636363 : #e5e5e5;
+    out property <color> muted: dark ? #9e9e9e : #6d6d6d;
+    // The header's sort arrows at their peaks (measured dark; light's up arrow #525252).
+    out property <color> sort-down: dark ? #848484 : #7b7b7b;
+    out property <color> sort-up: dark ? #ababab : #525252;
+    out property <color> chevron: dark ? #a0a0a0 : #808080;
+    out property <color> drive-chevron: dark ? #8b8b8b : #808080;
+    // A group header's title (and the This PC sections').
+    out property <color> group-text: dark ? #ffffff : #1e3287;
+    out property <color> group-hover: dark ? #4d4d4d : #e5f3ff;
+    out property <color> group-focus: dark ? #f3f3f3 : #99d1ff;
+    out property <color> check-off: dark ? #f3f3f3 : #ffffff;
+    out property <color> check-border: dark ? #626262 : #8a8a8a;
+    out property <color> check-on: dark ? #005fb8 : #005fb8;
+    out property <color> check-mark: #ffffff;
+    // The rename box over an item.
+    out property <color> edit-box: dark ? #191919 : #ffffff;
+    out property <color> details-edit-box: dark ? #212121 : #ffffff;
+    out property <color> edit-border: dark ? #ffffff : #000000;
+    in property <color> edit-selection: #0078d7;
+    in property <color> edit-selection-text: #ffffff;
+    // The rubber band.
+    out property <color> band: dark ? #0078d44d : #0078d44d;
+    out property <color> band-border: #0078d4;
+    // The DirectUI scroll bars.
+    out property <color> track: dark ? #171717 : #f0f0f0;
+    out property <color> track-edge: dark ? #171717 : #ffffff;
+    out property <color> caret: dark ? #959595 : #858585;
+    out property <color> caret-hot: dark ? #cdcdcd : #666666;
+    out property <color> thumb: dark ? #ffffff8a : #00000072;
+    out property <color> drive-bar: dark ? #e6e6e6 : #e6e6e6;
+    out property <color> drive-bar-border: dark ? #bcbcbc : #bcbcbc;
+    out property <color> drive-fill: dark ? #0070cb : #26a0da;
+    out property <color> drive-full: dark ? #da2626 : #c42b1c;
+    // DirectUI text: black in the light theme, where XAML's is a translucent black.
+    out property <color> dui-text: dark ? #ffffff : #000000;
+
+    // WinUI layers over the Mica Alt backdrop
+    out property <color> layer: dark ? #3a3a3a73 : #ffffffb3;
+    out property <color> subtle-hover: dark ? #ffffff0f : #00000009;
+    out property <color> subtle-pressed: dark ? #ffffff0b : #00000006;
+    // A button whose dropdown is open.
+    out property <color> menu-held: dark ? #ffffff09 : #00000006;
+    out property <color> control: dark ? #ffffff0f : #ffffffb3;
+    out property <color> control-hover: dark ? #ffffff15 : #f9f9f980;
+    out property <color> control-pressed: dark ? #ffffff0b : #f9f9f94d;
+    out property <color> control-border: dark ? #ffffff12 : #0000000f;
+    // WinUI's ControlElevationBorderBrush over 3px: the edge lit in dark (top), shaded in
+    // light (bottom), the default stroke elsewhere. Stops as fractions of a 29px button.
+    out property <brush> control-elevation-border: dark
+        ? @linear-gradient(180deg, #ffffff18 0%, #ffffff18 3.4%, #ffffff12 10.3%, #ffffff12 100%)
+        : @linear-gradient(0deg, #00000029 0%, #00000029 3.4%, #0000000f 10.3%, #0000000f 100%);
+    // The address box while editing, and the search box with the focus.
+    out property <color> address-edit: dark ? #242424b3 : #ffffff;
+    out property <color> search-focus: dark ? #1e1e1eb3 : #ffffff;
+    // Over the box's own fill here; XAML draws it outside the fill, over the bar.
+    out property <color> search-focus-border: dark ? #ffffff12 : #0000001a;
+    out property <color> address-border: dark ? #ffffff17 : #00000013;
+    // The address bar's suggestion list.
+    out property <color> suggestions: dark ? #2d2d2d : #f9f9f9;
+    out property <color> suggestions-border: dark ? #00000033 : #0000000f;
+    // Keyboard focus rings: a 2px outer stroke and a 1px inner one.
+    out property <color> focus-outer: dark ? #ffffff : #000000e4;
+    out property <color> focus-inner: dark ? #000000 : #ffffffb3;
+    // The details pane's info card.
+    out property <color> card: transparent;
+    out property <color> settings-card: dark ? #2b2b2b : #ffffff;
+    out property <color> settings-error: dark ? #ffb4ab : #b10e1c;
+    out property <color> card-border: dark ? #ffffff12 : #0000000f;
+    out property <color> command-divider: dark ? #2c2c2c : #f0f0f0;
+    out property <color> tab-divider: dark ? #ffffff15 : #0000000f;
+    out property <color> tab-drag: dark ? #282828 : #ffffff;
+    out property <color> tab-drag-hover: dark ? #ffffff0d : #00000009;
+    out property <color> text: dark ? #ffffff : #000000e4;
+    out property <color> text-secondary: dark ? #ffffffc8 : #0000009e;
+    out property <color> text-disabled: dark ? #ffffff5c : #0000005c;
+    // WinUI's TextFillColorTertiary (Home's empty text).
+    out property <color> text-tertiary: dark ? #ffffff8b : #00000072;
+    // An inactive window dims only its caption buttons.
+    out property <color> caption-glyph: dark ? #ffffff : #000000;
+    out property <color> caption-glyph-inactive: dark ? #ffffff66 : #00000066;
+    out property <color> flyout: dark ? #2c2c2c : #f9f9f9;
+    // Flyouts drawn over DWM's acrylic (menus as windows), lighter than XAML's own.
+    out property <color> flyout-plain: dark ? #2a2a2aeb : #fcfcfcf5;
+    out property <color> flyout-border: dark ? #3a3a3a : #e5e5e5;
+    out property <color> flyout-separator: dark ? #3d3d3d : #0000000f;
+    // The divider before a context menu's command row.
+    out property <color> flyout-divider: dark ? #3c3c3c : #e5e5e5;
+    out property <color> flyout-shadow: dark ? #00000042 : #00000024;
+    // The drag caption box.
+    out property <color> caption-box: dark ? #2c2c2c : #f9f9f9;
+    out property <color> caption-box-border: dark ? #3e3e3e : #e5e5e5;
+    // The classic tooltip (pointer tips) and XAML's (buttons).
+    out property <color> tip: dark ? #2b2b2b : #f9f9f9;
+    out property <color> tip-border: dark ? #767676 : #e5e5e5;
+    out property <color> tip-text: dark ? #ffffff : #575757;
+    out property <color> tip-shadow: #000000a0;
+    out property <color> xaml-tip: dark ? #2c2c2c : #f9f9f9;
+    out property <color> xaml-tip-border: dark ? #00000033 : #0000000f;
+    // Window-chrome scroll bars (XAML), as opposed to DirectUI's.
+    out property <color> xaml-thumb: dark ? #ffffff8a : #00000072;
+    out property <color> xaml-thumb-hot: dark ? #ffffff99 : #00000080;
+    out property <color> xaml-thumb-drag: dark ? #ffffffb8 : #0000009e;
+    out property <color> xaml-caret: dark ? #ffffff8c : #00000072;
+    out property <color> xaml-caret-hot: dark ? #ffffff : #000000e4;
+    in property <color> accent: #60cdff;
+
+    out property <string> font-text: "Segoe UI Variable Text";
+    // 12px UI text: XAML's default family, optically sized from the font size (opsz 9).
+    out property <string> font-small: "Segoe UI Variable";
+    // The named Small instance (opsz 8), which tab titles use.
+    out property <string> font-caption: "Segoe UI Variable Small";
+    out property <string> font-dui: "Segoe UI";
+    out property <string> font-icons: "Segoe Fluent Icons";
+}
+
+// Segoe Fluent Icons code points.
+export global Glyphs {
+    out property <string> settings: "\u{e713}";
+    out property <string> up: "\u{E110}";
+    out property <string> back: "\u{E72B}";
+    out property <string> forward: "\u{E72A}";
+    out property <string> refresh: "\u{E72C}";
+    out property <string> more: "\u{E712}";
+    out property <string> search: "\u{E721}";
+    out property <string> add: "\u{E710}";
+    out property <string> cancel: "\u{E711}";
+    out property <string> clear: "\u{E894}";
+    out property <string> pin: "\u{E841}";
+    out property <string> this-pc: "\u{E7F4}";
+    out property <string> check: "\u{E73E}";
+    out property <string> chevron-right-med: "\u{E974}";
+    out property <string> chevron-down-med: "\u{E972}";
+    out property <string> chevron-down: "\u{E70D}";
+    out property <string> chevron-up-small: "\u{E96D}";
+    out property <string> chevron-down-small: "\u{E96E}";
+    out property <string> caret-up: "\u{EDDB}";
+    out property <string> caret-down: "\u{EDDC}";
+    out property <string> caret-left: "\u{EDD9}";
+    out property <string> caret-right: "\u{EDDA}";
+    out property <string> minimize: "\u{E921}";
+    out property <string> maximize: "\u{E922}";
+    out property <string> restore: "\u{E923}";
+    out property <string> close: "\u{E8BB}";
+}
+
+export component Glyph inherits Text {
+    font-family: Theme.font-icons;
+    font-size: 16px;
+    color: Theme.text;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+}

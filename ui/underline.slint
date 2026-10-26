@@ -1,0 +1,18 @@
+import { Shell } from "shell.slint";
+
+// Keep text shaping untouched. DirectUI's single-click font adds a crisp 1px rule.
+export component Underlines inherits Rectangle {
+    in property <string> text;
+    in property <color> ink;
+    in property <length> font-size: 12px;
+    in property <int> align; // 0 left, 1 centered, 2 right
+    in property <length> baseline: 14px;
+    in property <length> pitch: 14px;
+    for advance[i] in Shell.underline-widths(root.text,root.font-size,root.width): Rectangle {
+        x: root.align == 1 ? floor((root.width - advance) / 2px) * 1px : root.align == 2 ? root.width - advance : 0px;
+        y: root.baseline + i * root.pitch;
+        width: max(0px,min(advance,root.width - self.x));
+        height: 1px;
+        background: root.ink;
+    }
+}
