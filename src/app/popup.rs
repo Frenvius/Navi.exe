@@ -1,5 +1,3 @@
-//! Menus as popup windows (acrylic, may extend past the main window), one per level.
-
 use std::rc::Rc;
 
 use slint::{ComponentHandle, Model, PhysicalPosition};
@@ -34,6 +32,15 @@ fn menu_pixels(width: i32, height: i32, dark: bool, context: bool) -> slint::Sha
         }
     }
     pixels
+}
+
+fn animations_enabled() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    let mut on: i32 = 1;
+    unsafe {
+        let _ = SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some(&mut on as *mut i32 as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0));
+    }
+    on != 0
 }
 
 fn row_y(data: &PopupData, index: usize, height: f32) -> f32 {
@@ -288,15 +295,11 @@ impl App {
         ((popup.get_menu_width() * scale).round() as i32, (popup.get_menu_height() * scale).round() as i32)
     }
 
-    /// Moves a menu shown by `show_cloaked` into place; it uncloaks once it has rendered.
-    fn open_at(&self, popup: &MenuPopup, level: i32, x: i32, y: i32) {
+    fn open_at(&self, popup: &MenuPopup, level: i32, (x, y): (i32, i32), up: bool) {
         let scale = popup.window().scale_factor();
         let (w, h) = ((popup.get_menu_width() + 20.0).round() as i32, (popup.get_menu_height() + 20.0).round() as i32);
         let dark = popup.global::<crate::Theme>().get_dark();
         let mut pixels = menu_pixels(w, h, dark, popup.get_data().padding == 4.0);
-        // The menu is still cloaked: capture only the content behind it, including
-        // another menu level, then bake its blurred contribution into fully covered
-        // body pixels. Shadow and partial edge coverage keep their recovered alpha.
         let _ = unsafe { windows::Win32::Graphics::Dwm::DwmFlush() };
         let (pw, ph) = ((w as f32 * scale).round() as usize, (h as f32 * scale).round() as usize);
         if let Some(backdrop) = crate::shell::backdrop::blurred(x - (10.0 * scale).round() as i32,
@@ -316,8 +319,12 @@ impl App {
         }
         popup.set_chrome_image(slint::Image::from_rgba8(pixels));
         popup.window().set_position(PhysicalPosition::new(x - (10.0 * scale).round() as i32, y - (2.0 * scale).round() as i32));
+        popup.set_slide_from(if animations_enabled() { popup.get_menu_height() * if up { 0.5 } else { -0.5 } } else { 0.0 });
         popup.window().request_redraw();
-        // In case no frame comes (nothing changed since it was last drawn).
+        if !self.popups.borrow().cloaked[level as usize] {
+            let weak = popup.as_weak();
+            slint::Timer::single_shot(std::time::Duration::ZERO, move || if let Some(p) = weak.upgrade() { p.invoke_start_slide(); });
+        }
         slint::Timer::single_shot(std::time::Duration::from_millis(100), move || super::with_app(|a| a.uncloak_popup(level)));
     }
 
@@ -329,6 +336,7 @@ impl App {
         let popup = if level == 0 { popups.main.as_ref() } else { popups.sub.as_ref() };
         if let Some(p) = popup {
             frame::cloak(hwnd_of(p.window()), false);
+            p.invoke_start_slide();
         }
     }
 
@@ -363,13 +371,6 @@ impl App {
         frame::menu_region(hwnd, pixels.as_bytes(), pixels.width() as usize, pixels.height() as usize, p.window().scale_factor());
     }
 
-    /// Opens the main menu at a client point (logical); it opens leftward from `flip_x` when
-    /// it would leave the screen.
-    /// `align` places the anchor `x` at the menu's left (0), center (0.5) or right (1).
-    /// A context menu (`context`: its gap from the point) opens down from the point when it
-    /// fits on the screen below it (keeping room for a command bar it lacks), else up when all
-    /// of it fits above, else with the point on its first item; it may extend past the window.
-    /// Its command bar goes on the side it opens from.
     pub fn show_menu_popup(self: &Rc<Self>, data: PopupData, x: f32, y: f32, flip_x: f32, align: f32, border: u32, context: Option<f32>) {
         self.popups.borrow_mut().border = border;
         self.close_sub_popup();
@@ -397,7 +398,6 @@ impl App {
         let (ax, ay) = frame::client_to_screen(main, (x * scale) as i32, (y * scale).round() as i32);
         let (fx, _) = frame::client_to_screen(main, (flip_x * scale) as i32, 0);
         let work = frame::work_area(ax, ay);
-        // Round once: a centered menu under a button with half-pixel center lands like XAML's.
         let (ox, _) = frame::client_to_screen(main, 0, 0);
         let mut px = ox + (x * scale - w as f32 * align).round() as i32;
         if px + w > work.right {
@@ -408,15 +408,10 @@ impl App {
             let gap = (gap * scale).round() as i32;
             let (_, top) = frame::client_to_screen(main, 0, 0);
             let bar = popup.get_data().buttons.row_count() > 0;
-            // It opens down when all of it fits on the screen, with room kept for the command
-            // bar when it has none (measured: at 560 a 385px background menu opens down, at
-            // 570 up, over a work area ending at 1032).
             let reserve = if bar { 0 } else { (82.0 * scale) as i32 };
             let (py, bar_bottom) = if ay + gap + h + reserve <= work.bottom {
                 (ay + gap, false)
             } else if ay - h >= top {
-                // Opening up, it grows toward the top (ending at the point): all of it has to
-                // fit.
                 (ay - h, true)
             } else {
                 (ay - ((if bar { 86.0 } else { 14.0 }) * scale) as i32, false)
@@ -433,10 +428,9 @@ impl App {
             ay
         };
         self.popups.borrow_mut().main_rect = (px, py, w, h);
-        self.open_at(&popup, 0, px, py);
+        self.open_at(&popup, 0, (px, py), py < ay);
     }
 
-    /// Opens a submenu beside the hovered item of the main menu (`item_y` logical, within it).
     pub fn show_sub_popup(self: &Rc<Self>, mut data: PopupData, parent_index: i32) {
         let scale = self.ui().window().scale_factor();
         let popup = {
@@ -453,8 +447,6 @@ impl App {
             main.set_open_index(parent_index);
             data.keyboard = main.get_keyboard();
         }
-        // Submenus line up with their item and overlap the menu: a MenuFlyout's by 5px, a
-        // context menu's (whose window is wider by its shadow margin) by 8px.
         let context_parent = self.popups.borrow().main.as_ref().is_some_and(|m| m.get_data().padding == 4.0);
         popup.set_data(data);
         popup.set_chrome_image(slint::Image::default());
@@ -472,7 +464,7 @@ impl App {
             px = mx - w - scale as i32;
         }
         let py = if item_y + h > work.bottom { (work.bottom - h).max(work.top) } else { item_y };
-        self.open_at(&popup, 1, px.max(work.left), py);
+        self.open_at(&popup, 1, (px.max(work.left), py), py < item_y);
     }
 
     pub fn close_sub_popup(&self) {

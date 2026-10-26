@@ -1,4 +1,3 @@
-// Windows 11 context menu / flyout (dark), measured from explorer.exe at 100% scale.
 import { Theme, Glyphs, Glyph } from "theme.slint";
 import { Shell, MenuEntry, MenuButton } from "shell.slint";
 import { CloudData, CloudFlyout } from "cloud.slint";
@@ -365,8 +364,6 @@ export struct PopupData {
     row-gap: length,
 }
 
-// One menu level as its own top-level window, so it can extend past the main window and
-// get the system's acrylic backdrop like Explorer's flyouts.
 export component MenuPopup inherits Window {
     pure callback chrome(int, int, bool, bool) -> image;
     in property <image> chrome-image;
@@ -384,17 +381,36 @@ export component MenuPopup inherits Window {
     in-out property <bool> keyboard;
     callback key-tips(bool);
     callback focus-button(int);
+    in-out property <length> slide-from;
+    property <bool> sliding;
+    property <duration> slide-start;
+    property <float> slide-s: root.sliding ? pow(min(1, max(0, (animation-tick() - root.slide-start) / 250ms)), 1 / 3) : 0;
+    property <length> slide: root.slide-from * (1 - (3 - 2 * root.slide-s) * root.slide-s * root.slide-s);
+    public function start-slide() {
+        root.slide-start = animation-tick();
+        root.sliding = true;
+    }
+    Timer {
+        interval: 50ms;
+        running: root.sliding;
+        triggered => {
+            if animation-tick() - root.slide-start >= 250ms {
+                root.sliding = false;
+                root.slide-from = 0px;
+            }
+        }
+    }
 
     no-frame: true;
     background: transparent;
     width: root.menu-width + 20px;
     height: root.menu-height + 20px;
     Image {
+        y: root.slide;
         width: parent.width;
         height: parent.height;
         source: root.chrome-image.width > 0 ? root.chrome-image : root.chrome(round(root.width / 1px), round(root.height / 1px), Theme.dark, root.data.padding == 4px);
     }
-    // The size for the current data, before the window itself is resized to it.
     out property <length> menu-width: root.data.cloud ? 320px : flyout.width;
     out property <length> menu-height: root.data.cloud ? 202px + (root.cloud-data.more == "" ? 0px : 48px) : flyout.height;
 
@@ -417,6 +433,7 @@ export component MenuPopup inherits Window {
     }
 
     scope := FocusScope {
+        y: root.slide;
         key-pressed(e) => {
             root.keyboard = true;
             if e.text == Key.Escape {
