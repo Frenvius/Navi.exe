@@ -320,7 +320,7 @@ pub fn focus_debug(hwnd: HWND, zone: usize) {
     if hwnd.is_invalid() {
         return;
     }
-    let name = crate::shell::wide("SlintFocusZone");
+    let name = crate::shell::wide("NaviFocusZone");
     unsafe {
         let _ = SetPropW(
             hwnd,
@@ -507,7 +507,7 @@ pub fn prepare(hwnd: HWND) -> windows::core::Result<()> {
     Ok(())
 }
 
-const SETTINGS_KEY: windows::core::PCWSTR = windows::core::w!(r"Software\slint-win-explorer");
+const SETTINGS_KEY: windows::core::PCWSTR = windows::core::w!(r"Software\Navi");
 const PLACEMENT_VALUE: windows::core::PCWSTR = windows::core::w!("WindowPlacement");
 
 pub fn normal_placement(hwnd: HWND) -> windows::core::Result<WINDOWPLACEMENT> {

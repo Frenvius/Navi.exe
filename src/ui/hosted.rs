@@ -197,7 +197,7 @@ pub fn sync(hwnd: HWND) {
     if let Some((path, rect)) = desired {
         if !was_hosted {
             if let Err(error) =
-                unsafe { SetPropW(hwnd, w!("SlintNativeView"), Some(HANDLE(1 as _))) }
+                unsafe { SetPropW(hwnd, w!("NaviNativeView"), Some(HANDLE(1 as _))) }
             {
                 eprintln!("hosted palette marker: {error}");
             }
@@ -248,7 +248,7 @@ pub fn sync(hwnd: HWND) {
         }
     } else if was_hosted {
         drop(hosted.take());
-        if let Err(error) = unsafe { RemovePropW(hwnd, w!("SlintNativeView")) } {
+        if let Err(error) = unsafe { RemovePropW(hwnd, w!("NaviNativeView")) } {
             eprintln!("hosted palette cleanup: {error}");
         }
         if unsafe { GetForegroundWindow() } == hwnd {

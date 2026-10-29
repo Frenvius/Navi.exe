@@ -100,6 +100,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "navi"
+version = "0.1.0"
+dependencies = [
+ "notify",
+ "serde",
+ "serde_json",
+ "windows",
+ "windows-collections",
+ "windows-core",
+ "winreg",
+]
+
+[[package]]
 name = "notify"
 version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -194,19 +207,6 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
-]
-
-[[package]]
-name = "slint-win-explorer"
-version = "0.1.0"
-dependencies = [
- "notify",
- "serde",
- "serde_json",
- "windows",
- "windows-collections",
- "windows-core",
- "winreg",
 ]
 
 [[package]]

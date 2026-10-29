@@ -75,7 +75,7 @@ pub fn message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Opti
 }
 
 fn activate_once(hwnd: HWND) -> bool {
-    if unsafe { GetPropW(hwnd, w!("SlintExplorerMain")) }.0 as usize
+    if unsafe { GetPropW(hwnd, w!("NaviMain")) }.0 as usize
         != crate::app::tab_transfer::MARKER
         || !crate::app::tab_transfer::same_executable(hwnd)
     {

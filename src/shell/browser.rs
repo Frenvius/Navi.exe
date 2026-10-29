@@ -223,7 +223,7 @@ fn install_palette_hook() {
                 let create = &*(l.0 as *const CBT_CREATEWNDW);
                 let parent = (*create.lpcs).hwndParent;
                 let root = GetAncestor(parent, GA_ROOT);
-                if GetPropW(root, windows::core::w!("SlintNativeView")).0 as usize == 1 {
+                if GetPropW(root, windows::core::w!("NaviNativeView")).0 as usize == 1 {
                     app_mode(1);
                 }
             }

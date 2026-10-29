@@ -18,8 +18,8 @@ use windows::{
     },
 };
 use winreg::{enums::*, RegKey};
-pub const APP_ID: &str = "SlintWinExplorer.App";
-const HISTORY: &str = r"Software\slint-win-explorer\JumpList";
+pub const APP_ID: &str = "Navi.App";
+const HISTORY: &str = r"Software\Navi\JumpList";
 const KEYS: [PROPERTYKEY; 4] = [
     PKEY_AppUserModel_RelaunchCommand,
     PKEY_AppUserModel_RelaunchDisplayNameResource,
@@ -230,7 +230,7 @@ impl Lock {
             let handle = CreateMutexW(
                 None,
                 false,
-                PCWSTR(wide(&format!(r"Local\SlintExplorerJumpList-{:x}", h.finish())).as_ptr()),
+                PCWSTR(wide(&format!(r"Local\NaviJumpList-{:x}", h.finish())).as_ptr()),
             )
             .ok()?;
             let wait = WaitForSingleObject(handle, 2000);
@@ -301,7 +301,7 @@ unsafe fn removed_path(link: &IShellLinkW) -> Option<String> {
     link.GetArguments(&mut args).ok()?;
     let len = args.iter().position(|&c| c == 0).unwrap_or(args.len());
     let command = wide(&format!(
-        "slint-win-explorer.exe {}",
+        "navi.exe {}",
         String::from_utf16_lossy(&args[..len])
     ));
     let mut count = 0;
@@ -422,7 +422,7 @@ mod tests {
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 w!("STATIC"),
-                w!("Slint Explorer metadata test"),
+                w!("Navi metadata test"),
                 WINDOW_STYLE(0),
                 0,
                 0,
@@ -465,7 +465,7 @@ mod tests {
             let second = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 w!("STATIC"),
-                w!("Slint Explorer second metadata test"),
+                w!("Navi second metadata test"),
                 WINDOW_STYLE(0),
                 0,
                 0,

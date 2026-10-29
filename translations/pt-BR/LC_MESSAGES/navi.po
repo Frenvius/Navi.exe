@@ -1,4 +1,4 @@
-# Brazilian Portuguese for slint-win-explorer. The msgids are the keys read by src/i18n.rs. Strings the shell has
+# Brazilian Portuguese for Navi. The msgids are the keys read by src/i18n.rs. Strings the shell has
 # itself (group names, default names, "free of") come from its resources instead.
 # Measured on the real Explorer, or read from Windows' pt-BR resources (tools/winstr.py).
 msgid ""
@@ -418,7 +418,7 @@ msgid "settings.default.title"
 msgstr "Definir como gerenciador de arquivos padrão"
 
 msgid "settings.default.description"
-msgstr "Abre pastas, Win+E e links de pastas de outros apps no slint-win-explorer. Desligue para restaurar o Explorer."
+msgstr "Abre pastas, Win+E e links de pastas de outros apps no Navi. Desligue para restaurar o Explorer."
 
 msgid "settings.default.restore"
 msgstr "Restaurar associações originais"

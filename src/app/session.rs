@@ -21,7 +21,7 @@ use windows::{
 };
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
-const ROOT: &str = r"Software\slint-win-explorer\Sessions";
+const ROOT: &str = r"Software\Navi\Sessions";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Window {
     pub paths: Vec<String>,
@@ -60,7 +60,7 @@ impl Lock {
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             std::env::var_os("USERPROFILE").hash(&mut hash);
             let name =
-                crate::shell::wide(&format!(r"Local\SlintExplorerSessions-{:x}", hash.finish()));
+                crate::shell::wide(&format!(r"Local\NaviSessions-{:x}", hash.finish()));
             let handle = CreateMutexW(None, false, PCWSTR(name.as_ptr())).ok()?;
             let wait = WaitForSingleObject(handle, 2000);
             if wait.0 != 0 && wait.0 != 0x80 {

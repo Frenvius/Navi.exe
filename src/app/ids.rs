@@ -1,6 +1,6 @@
 pub const SETTINGS: &str = concat!(env!("CARGO_PKG_NAME"), ":settings");
 pub fn is_settings(path: &str) -> bool {
-    path.eq_ignore_ascii_case(SETTINGS) || path.eq_ignore_ascii_case("Slint:settings")
+    path.eq_ignore_ascii_case(SETTINGS)
 }
 
 pub const THIS_PC: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
@@ -142,9 +142,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_history_accepts_the_previous_namespace_and_canonicalizes_it() {
-        assert!(is_settings("Slint:Settings"));
-        assert_eq!(canonical("Slint:Settings"), SETTINGS);
+    fn settings_ids_ignore_case_and_canonicalize() {
+        assert!(is_settings("Navi:Settings"));
+        assert_eq!(canonical("Navi:Settings"), SETTINGS);
         assert_eq!(canonical(SETTINGS), SETTINGS);
         assert!(!is_settings("other:settings"));
     }

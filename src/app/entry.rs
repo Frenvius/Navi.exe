@@ -19,7 +19,7 @@ use windows::{
 };
 const DATA: usize = 0x5357454c;
 const LAUNCH_MARK: usize = 0x53574c;
-pub const USAGE:&str="slint-win-explorer [--new-window | --reuse-window | --new-tab] [--] <folder>\nslint-win-explorer [/select,<item> | --select <item>]\nslint-win-explorer --restore-session <id>";
+pub const USAGE:&str="navi [--new-window | --reuse-window | --new-tab] [--] <folder>\nnavi [/select,<item> | --select <item>]\nnavi --restore-session <id>";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
@@ -261,7 +261,7 @@ impl Lock {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             std::env::var_os("USERPROFILE").hash(&mut h);
             std::env::current_exe().ok().hash(&mut h);
-            let name = crate::shell::wide(&format!(r"Local\SlintExplorerLaunch-{:x}", h.finish()));
+            let name = crate::shell::wide(&format!(r"Local\NaviLaunch-{:x}", h.finish()));
             let handle = CreateMutexW(None, false, PCWSTR(name.as_ptr())).ok()?;
             let wait = WaitForSingleObject(handle, 5000);
             if wait.0 != 0 && wait.0 != 0x80 {
@@ -306,8 +306,8 @@ fn decode(bytes: &[u8]) -> Option<Request> {
 unsafe extern "system" fn collect(hwnd: HWND, param: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd).as_bool()
         && IsWindowEnabled(hwnd).as_bool()
-        && GetPropW(hwnd, w!("SlintExplorerMain")).0 as usize == 0x535745
-        && GetPropW(hwnd, w!("SlintExplorerLaunchReady")).0 as usize == 1
+        && GetPropW(hwnd, w!("NaviMain")).0 as usize == 0x535745
+        && GetPropW(hwnd, w!("NaviLaunchReady")).0 as usize == 1
         && super::tab_transfer::same_executable(hwnd)
     {
         (&mut *(param.0 as *mut Vec<HWND>)).push(hwnd);
@@ -318,7 +318,7 @@ struct Requester(HWND);
 impl Drop for Requester {
     fn drop(&mut self) {
         unsafe {
-            let _ = RemovePropW(self.0, w!("SlintExplorerLaunch"));
+            let _ = RemovePropW(self.0, w!("NaviLaunch"));
             let _ = DestroyWindow(self.0);
         }
     }
@@ -336,7 +336,7 @@ fn dispatch(launch: &Launch) -> bool {
         let Ok(source) = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
-            w!("Slint Explorer launcher"),
+            w!("Navi launcher"),
             WINDOW_STYLE(0),
             0,
             0,
@@ -352,7 +352,7 @@ fn dispatch(launch: &Launch) -> bool {
         let _owned = Requester(source);
         let _ = SetPropW(
             source,
-            w!("SlintExplorerLaunch"),
+            w!("NaviLaunch"),
             Some(HANDLE(LAUNCH_MARK as _)),
         );
         let path = launch.path.clone().unwrap_or_else(ids::start_location);
@@ -379,7 +379,7 @@ fn dispatch(launch: &Launch) -> bool {
                 #[cfg(debug_assertions)]
                 let _ = SetPropW(
                     target,
-                    w!("SlintLaunchPermission"),
+                    w!("NaviLaunchPermission"),
                     Some(HANDLE((permitted as usize + 1) as _)),
                 );
             }
@@ -540,7 +540,7 @@ pub(crate) fn incoming(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<Resul
     }
     let source = HWND(wparam.0 as _);
     unsafe {
-        if GetPropW(source, w!("SlintExplorerLaunch")).0 as usize != LAUNCH_MARK
+        if GetPropW(source, w!("NaviLaunch")).0 as usize != LAUNCH_MARK
             || !super::tab_transfer::same_executable(source)
         {
             return None;
@@ -564,7 +564,7 @@ pub(crate) fn incoming(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<Resul
 
 pub fn ready_window(hwnd: HWND) {
     if let Err(error) =
-        unsafe { SetPropW(hwnd, w!("SlintExplorerLaunchReady"), Some(HANDLE(1 as _))) }
+        unsafe { SetPropW(hwnd, w!("NaviLaunchReady"), Some(HANDLE(1 as _))) }
     {
         eprintln!("launch readiness: {error}");
     }

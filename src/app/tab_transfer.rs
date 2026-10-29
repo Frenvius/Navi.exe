@@ -7,12 +7,12 @@ pub(crate) const HOVER: u32 = WM_APP + 0x36;
 pub(crate) const CLEAR: u32 = WM_APP + 0x37;
 pub fn install(hwnd: HWND) {
     unsafe {
-        let _ = SetPropW(hwnd, w!("SlintExplorerMain"), Some(HANDLE(MARKER as _)));
+        let _ = SetPropW(hwnd, w!("NaviMain"), Some(HANDLE(MARKER as _)));
     }
 }
 
 pub(crate) fn peer(hwnd: HWND) -> bool {
-    (unsafe { GetPropW(hwnd, w!("SlintExplorerMain")).0 as usize == MARKER })
+    (unsafe { GetPropW(hwnd, w!("NaviMain")).0 as usize == MARKER })
         && same_executable(hwnd)
 }
 pub fn same_executable(hwnd: HWND) -> bool {

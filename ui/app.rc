@@ -12,18 +12,18 @@ BEGIN
   BEGIN
    VALUE "FileDescription", "File Explorer\0"
    VALUE "FileVersion", "0.1.0\0"
-   VALUE "InternalName", "slint-win-explorer\0"
-   VALUE "OriginalFilename", "slint-win-explorer.exe\0"
-   VALUE "ProductName", "Slint Windows Explorer\0"
+   VALUE "InternalName", "navi\0"
+   VALUE "OriginalFilename", "navi.exe\0"
+   VALUE "ProductName", "Navi\0"
    VALUE "ProductVersion", "0.1.0\0"
   END
   BLOCK "041604b0"
   BEGIN
    VALUE "FileDescription", "Explorador de Arquivos\0"
    VALUE "FileVersion", "0.1.0\0"
-   VALUE "InternalName", "slint-win-explorer\0"
-   VALUE "OriginalFilename", "slint-win-explorer.exe\0"
-   VALUE "ProductName", "Slint Windows Explorer\0"
+   VALUE "InternalName", "navi\0"
+   VALUE "OriginalFilename", "navi.exe\0"
+   VALUE "ProductName", "Navi\0"
    VALUE "ProductVersion", "0.1.0\0"
   END
  END

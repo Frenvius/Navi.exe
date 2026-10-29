@@ -1,4 +1,4 @@
-# English for slint-win-explorer. The msgids are the keys read by src/i18n.rs. Strings the shell has
+# English for Navi. The msgids are the keys read by src/i18n.rs. Strings the shell has
 # itself (group names, default names, "free of") come from its resources instead.
 # Measured on the real Explorer with an English display language, or read from the same
 # resource in Windows' en-US language pack (tools/winstr.py) (2026-10-23).
@@ -419,7 +419,7 @@ msgid "settings.default.title"
 msgstr "Set as the default file manager"
 
 msgid "settings.default.description"
-msgstr "Open folders, Win+E and folder links from other apps in slint-win-explorer. Turn off to restore File Explorer."
+msgstr "Open folders, Win+E and folder links from other apps in Navi. Turn off to restore File Explorer."
 
 msgid "settings.default.restore"
 msgstr "Restore original associations"

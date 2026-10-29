@@ -186,7 +186,7 @@ fn create_window_with_launch(
         CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP,
             w!("SwExplorerFrame"),
-            w!("slint-win-explorer"),
+            w!("Navi"),
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

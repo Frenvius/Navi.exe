@@ -255,7 +255,7 @@ fn backup_path() -> io::Result<PathBuf> {
         std::env::var_os("LOCALAPPDATA")
             .ok_or_else(|| issue("settings.default.backup-unavailable"))?,
     )
-    .join("SlintWinExplorer/default-file-manager/active.json"))
+    .join("Navi/default-file-manager/active.json"))
 }
 fn load(path: &Path) -> io::Result<Option<Backup>> {
     match fs::File::open(path) {
@@ -319,7 +319,7 @@ impl Lock {
         };
         let mut h = std::collections::hash_map::DefaultHasher::new();
         std::env::var_os("USERPROFILE").hash(&mut h);
-        let name = crate::shell::wide(&format!(r"Local\SlintDefaultManager-{:x}", h.finish()));
+        let name = crate::shell::wide(&format!(r"Local\NaviDefaultManager-{:x}", h.finish()));
         unsafe {
             let handle =
                 CreateMutexW(None, false, PCWSTR(name.as_ptr())).map_err(io::Error::other)?;
@@ -472,7 +472,7 @@ mod tests {
         let mut reg = Memory::default();
         reg.keys
             .extend(["Software".into(), r"Software\Classes".into()]);
-        let all = targets(Path::new(r"C:\Program Files\Slint\slint-win-explorer.exe"));
+        let all = targets(Path::new(r"C:\Program Files\Navi\navi.exe"));
         for (i, (k, n, _)) in all.iter().take(12).enumerate() {
             reg.write(
                 k,
@@ -488,7 +488,7 @@ mod tests {
         let keys = reg.keys.clone();
         let b = snapshot(
             &reg,
-            Path::new(r"C:\Program Files\Slint\slint-win-explorer.exe"),
+            Path::new(r"C:\Program Files\Navi\navi.exe"),
         )
         .unwrap();
         let b: Backup = serde_json::from_slice(&serde_json::to_vec(&b).unwrap()).unwrap();
@@ -502,7 +502,7 @@ mod tests {
         let mut reg = Memory::default();
         reg.keys
             .extend(["Software".into(), r"Software\Classes".into()]);
-        let b = snapshot(&reg, Path::new(r"C:\Slint\slint-win-explorer.exe")).unwrap();
+        let b = snapshot(&reg, Path::new(r"C:\Navi\navi.exe")).unwrap();
         reg.fail_after = Some(7);
         assert!(apply(&mut reg, &b).is_err());
         restore(&mut reg, &b).unwrap();
@@ -520,7 +520,7 @@ mod tests {
         let mut reg = Memory::default();
         reg.keys
             .extend(["Software".into(), r"Software\Classes".into()]);
-        let mut b = snapshot(&reg, Path::new(r"C:\Slint\slint-win-explorer.exe")).unwrap();
+        let mut b = snapshot(&reg, Path::new(r"C:\Navi\navi.exe")).unwrap();
         apply(&mut reg, &b).unwrap();
         reg.write(&b.records[0].key, "Unrelated", Some(&string("keep")))
             .unwrap();

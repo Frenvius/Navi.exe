@@ -8,8 +8,8 @@ use windows::Win32::System::LibraryLoader::{
 };
 use windows::Win32::UI::WindowsAndMessaging::LoadStringW;
 
-const EN: &str = include_str!("../translations/en/LC_MESSAGES/slint-win-explorer.po");
-const PT_BR: &str = include_str!("../translations/pt-BR/LC_MESSAGES/slint-win-explorer.po");
+const EN: &str = include_str!("../translations/en/LC_MESSAGES/navi.po");
+const PT_BR: &str = include_str!("../translations/pt-BR/LC_MESSAGES/navi.po");
 
 /// The catalog for the display language: "pt-BR" or "en".
 pub fn language() -> &'static str {
