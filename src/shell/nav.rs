@@ -1,5 +1,3 @@
-//! Navigation pane namespace: the same roots and children Explorer's tree shows.
-
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, PROPERTYKEY};
 use windows::Win32::Storage::EnhancedStorage::PKEY_IsPinnedToNameSpaceTree;
@@ -79,14 +77,11 @@ pub fn children(id: &str) -> Result<Vec<NavNode>, String> {
         }
         children.sort_by(|a, b| (folder.CompareIDs(LPARAM(0), *a, *b).0 as i16).cmp(&0));
         for crel in children {
-            let name = display_name(&folder, crel, SHGDN_NORMAL);
-            let mut attrs = (SFGAO_HASSUBFOLDER | SFGAO_FILESYSTEM).0;
-            let _ = folder.GetAttributesOf(&[crel as *const _], &mut attrs);
             let abs = ILCombine(Some(parent.ptr()), Some(crel));
             let node_id = name_of(abs, SIGDN_DESKTOPABSOLUTEPARSING);
-            let item = SHCreateItemFromIDList::<IShellItem2>(abs).ok();
             let get_bool = |key: &PROPERTYKEY| {
-                item.as_ref()
+                SHCreateItemFromIDList::<IShellItem2>(abs)
+                    .ok()
                     .and_then(|it| it.GetBool(key).ok())
                     .map(|b| b.as_bool())
                     .unwrap_or(false)
@@ -112,6 +107,9 @@ pub fn children(id: &str) -> Result<Vec<NavNode>, String> {
             };
 
             if keep {
+                let name = display_name(&folder, crel, SHGDN_NORMAL);
+                let mut attrs = (SFGAO_HASSUBFOLDER | SFGAO_FILESYSTEM).0;
+                let _ = folder.GetAttributesOf(&[crel as *const _], &mut attrs);
                 out.push(NavNode {
                     name,
                     id: node_id,
@@ -128,7 +126,6 @@ pub fn children(id: &str) -> Result<Vec<NavNode>, String> {
     }
 }
 
-/// Pins or unpins a folder to Home (Quick access) through the shell verbs Explorer uses.
 pub fn set_pinned(id: &str, pinned: bool) -> Result<(), String> {
     com_init();
     let pidl = Pidl::parse(id)?;
@@ -136,7 +133,10 @@ pub fn set_pinned(id: &str, pinned: bool) -> Result<(), String> {
 }
 
 pub fn set_pinned_pidl(pidl: &Pidl, pinned: bool) -> Result<(), String> {
-    let verb = wide(if pinned { "pintohome" } else { "unpinfromhome" });
+    if !pinned {
+        return super::quick_access::unpin(pidl);
+    }
+    let verb = wide("pintohome");
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_INVOKEIDLIST,

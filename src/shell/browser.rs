@@ -1,4 +1,3 @@
-//! Host shell-owned views for Control Panel; no applet or category is reimplemented.
 use super::*;
 use windows::core::{implement, Interface, Ref};
 use windows::Win32::Foundation::{HWND, RECT};
@@ -36,16 +35,14 @@ pub fn is_control_panel(path: &str) -> bool {
 
 #[implement(IExplorerBrowserEvents)]
 struct Events {
-    navigate: fn(String),
-    parent: HWND,
+    navigate: Box<dyn Fn(String)>,
 }
 impl IExplorerBrowserEvents_Impl for Events_Impl {
     fn OnNavigationPending(&self, _: *const Common::ITEMIDLIST) -> windows::core::Result<()> {
-        app_mode(0);
+        app_mode(1);
         Ok(())
     }
     fn OnViewCreated(&self, view: Ref<'_, IShellView>) -> windows::core::Result<()> {
-        light_frame(self.parent);
         if let Some(view) = view.as_ref() {
             unsafe {
                 let _ = view.UIActivate(SVUIA_ACTIVATE_NOFOCUS.0 as u32);
@@ -75,7 +72,11 @@ pub struct Browser {
     pub path: String,
 }
 impl Browser {
-    pub fn new(hwnd: HWND, rect: RECT, navigate: fn(String)) -> Result<Self, String> {
+    pub fn new(
+        hwnd: HWND,
+        rect: RECT,
+        navigate: impl Fn(String) + 'static,
+    ) -> Result<Self, String> {
         unsafe {
             install_palette_hook();
             let browser: IExplorerBrowser =
@@ -91,8 +92,7 @@ impl Browser {
                 ViewMode: FVM_AUTO.0 as u32,
                 fFlags: (FWF_AUTOARRANGE | FWF_FULLROWSELECT | FWF_NOHEADERINALLVIEWS).0 as u32,
             };
-            // Construct the classic frame with its light palette before the dark item view.
-            app_mode(0);
+            app_mode(1);
             let initialized = browser.Initialize(hwnd, &rect, Some(&settings));
             app_mode(1);
             if let Err(error) = initialized {
@@ -100,8 +100,7 @@ impl Browser {
                 return Err(error.message());
             }
             let events: IExplorerBrowserEvents = Events {
-                navigate,
-                parent: hwnd,
+                navigate: Box::new(navigate),
             }
             .into();
             let cookie = match browser.Advise(&events) {
@@ -123,7 +122,7 @@ impl Browser {
             return Ok(());
         }
         let pidl = Pidl::parse(path)?;
-        app_mode(0);
+        app_mode(1);
         unsafe {
             if let Err(error) = self.browser.BrowseToIDList(pidl.ptr(), SBSP_ABSOLUTE) {
                 app_mode(1);
@@ -196,48 +195,6 @@ impl Drop for Browser {
 // Classic Explorer's frame stays light even when its item view/tree are dark.
 // Theme only the outer DirectUI frame; DefView and the namespace tree keep their
 // independent Explorer themes.
-fn light_frame(parent: HWND) {
-    unsafe {
-        use windows::core::BOOL;
-        use windows::Win32::Foundation::LPARAM;
-        use windows::Win32::UI::WindowsAndMessaging::*;
-        unsafe extern "system" fn child(hwnd: HWND, _: LPARAM) -> BOOL {
-            let mut class = [0u16; 64];
-            let n = GetClassNameW(hwnd, &mut class);
-            if String::from_utf16_lossy(&class[..n as usize]) == "DUIViewWndClassName" {
-                light(hwnd);
-                let mut direct = GetWindow(hwnd, GW_CHILD).unwrap_or_default();
-                while !direct.0.is_null() {
-                    let mut name = [0u16; 64];
-                    let n = GetClassNameW(direct, &mut name);
-                    if String::from_utf16_lossy(&name[..n as usize]) == "DirectUIHWND" {
-                        light(direct);
-                    }
-                    direct = GetWindow(direct, GW_HWNDNEXT).unwrap_or_default();
-                }
-            }
-            true.into()
-        }
-        unsafe fn light(hwnd: HWND) {
-            use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-            if let Ok(module) = GetModuleHandleW(windows::core::w!("uxtheme.dll")) {
-                if let Some(function) = GetProcAddress(module, windows::core::PCSTR(133usize as _))
-                {
-                    let allow: unsafe extern "system" fn(HWND, i32) -> i32 =
-                        std::mem::transmute(function);
-                    allow(hwnd, 0);
-                }
-            }
-            let _ = windows::Win32::UI::Controls::SetWindowTheme(
-                hwnd,
-                windows::core::w!("Explorer"),
-                windows::core::PCWSTR::null(),
-            );
-        }
-        let _ = EnumChildWindows(Some(parent), Some(child), LPARAM(0));
-    }
-}
-
 fn app_mode(value: i32) {
     unsafe {
         use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};

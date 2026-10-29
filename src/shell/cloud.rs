@@ -1,11 +1,6 @@
-//! Registered cloud-provider status. COM objects and command execution stay on one STA.
-//! Merely reading status never invokes a command or hydrates a file.
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    },
-    time::{Duration, Instant},
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc,
 };
 use windows::{
     core::{GUID, HSTRING},
@@ -41,6 +36,63 @@ pub struct Snapshot {
 pub enum Request {
     Path(String),
     Invoke(u64, usize),
+    Stop,
+}
+
+struct Signal(windows::Win32::Foundation::HANDLE);
+
+unsafe impl Send for Signal {}
+unsafe impl Sync for Signal {}
+
+impl Drop for Signal {
+    fn drop(&mut self) {
+        if let Err(error) = unsafe { windows::Win32::Foundation::CloseHandle(self.0) } {
+            eprintln!("cloud wake release: {error}");
+        }
+    }
+}
+
+struct Channel {
+    requests: mpsc::Sender<Request>,
+    signal: Arc<Signal>,
+}
+
+impl Drop for Channel {
+    fn drop(&mut self) {
+        if self.requests.send(Request::Stop).is_ok() {
+            if let Err(error) =
+                unsafe { windows::Win32::System::Threading::SetEvent(self.signal.0) }
+            {
+                eprintln!("cloud stop wake: {error}");
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Sender(Arc<Channel>);
+
+impl Sender {
+    pub fn send(&self, request: Request) -> Result<(), String> {
+        self.0
+            .requests
+            .send(request)
+            .map_err(|error| error.to_string())?;
+        unsafe { windows::Win32::System::Threading::SetEvent(self.0.signal.0) }
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub fn icon_path(uri: &str) -> Option<std::path::PathBuf> {
+    let uri = windows::Foundation::Uri::CreateUri(&HSTRING::from(uri)).ok()?;
+    if !uri.SchemeName().is_ok_and(|scheme| scheme == "file") {
+        return None;
+    }
+    let path = uri.Path().ok()?;
+    let path = windows::Foundation::Uri::UnescapeComponent(&path)
+        .unwrap_or(path)
+        .to_string();
+    Some(std::path::PathBuf::from(path.trim_start_matches('/')))
 }
 pub fn contains(root: &str, path: &str) -> bool {
     let root = root.trim_end_matches(['\\', '/']).to_lowercase();
@@ -51,7 +103,7 @@ pub fn contains(root: &str, path: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('\\'))
 }
 
-fn registration(path: &str) -> Option<(String, GUID, String)> {
+fn registered_source(path: &str) -> Option<(String, GUID, String)> {
     use winreg::{enums::*, RegKey};
     let roots = RegKey::predef(HKEY_LOCAL_MACHINE)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager")
@@ -84,23 +136,29 @@ fn registration(path: &str) -> Option<(String, GUID, String)> {
     matches
         .into_iter()
         .max_by_key(|m| m.0)
-        .map(|(_, id, clsid, label)| {
-            // The navigation namespace supplies the localized account caption (not
-            // the registration's fallback "OneDrive - Personal"). Never parse account files.
-            let label = super::nav::children("")
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|n| {
-                    let p = super::Pidl::parse(&n.id).ok()?;
-                    let root = p.name(windows::Win32::UI::Shell::SIGDN_FILESYSPATH);
-                    (!root.is_empty() && contains(&root, path)).then_some((root.len(), n.name))
-                })
-                .max_by_key(|n| n.0)
-                .map(|n| n.1)
-                .unwrap_or(label);
-            (id, clsid, label)
-        })
+        .map(|(_, id, clsid, label)| (id, clsid, label))
 }
+
+pub fn supports(path: &str) -> bool {
+    registered_source(path).is_some()
+}
+
+fn registration(path: &str) -> Option<(String, GUID, String)> {
+    let (id, clsid, label) = registered_source(path)?;
+    let label = super::nav::children("")
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|n| {
+            let p = super::Pidl::parse(&n.id).ok()?;
+            let root = p.name(windows::Win32::UI::Shell::SIGDN_FILESYSPATH);
+            (!root.is_empty() && contains(&root, path)).then_some((root.len(), n.name))
+        })
+        .max_by_key(|n| n.0)
+        .map(|n| n.1)
+        .unwrap_or(label);
+    Some((id, clsid, label))
+}
+
 fn command(c: Option<&IStorageProviderUICommand>) -> Command {
     c.map(|c| Command {
         label: c.Label().unwrap_or_default().to_string(),
@@ -118,10 +176,19 @@ fn command(c: Option<&IStorageProviderUICommand>) -> Command {
     })
 }
 
-pub fn start(publish: impl Fn(Snapshot) + Send + 'static) -> mpsc::Sender<Request> {
+pub fn start(publish: impl Fn(Snapshot) + Send + 'static) -> Result<Sender, String> {
     let (tx, rx) = mpsc::channel();
+    let signal = Arc::new(Signal(
+        unsafe { windows::Win32::System::Threading::CreateEventW(None, true, false, None) }
+            .map_err(|error| error.to_string())?,
+    ));
+    let channel = Sender(Arc::new(Channel {
+        requests: tx,
+        signal: signal.clone(),
+    }));
     std::thread::spawn(move || unsafe {
-        if RoInitialize(RO_INIT_SINGLETHREADED).is_err() {
+        if let Err(error) = RoInitialize(RO_INIT_SINGLETHREADED) {
+            eprintln!("cloud apartment: {error}");
             return;
         }
         let dirty = Arc::new(AtomicBool::new(true));
@@ -130,18 +197,32 @@ pub fn start(publish: impl Fn(Snapshot) + Send + 'static) -> mpsc::Sender<Reques
         let mut commands: Vec<Option<IStorageProviderUICommand>> = Vec::new();
         let mut last = Snapshot::default();
         let mut revision = 0;
-        let mut refreshed = Instant::now() - Duration::from_secs(10);
-        loop {
-            let first = match rx.recv_timeout(Duration::from_millis(20)) {
-                Ok(r) => Some(r),
-                Err(mpsc::RecvTimeoutError::Timeout) => None,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            };
-            for request in first.into_iter().chain(rx.try_iter()) {
+        'events: loop {
+            if MsgWaitForMultipleObjectsEx(
+                Some(&[signal.0]),
+                u32::MAX,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            ) == windows::Win32::Foundation::WAIT_FAILED
+            {
+                eprintln!("cloud wait: {}", windows::core::Error::from_win32());
+                break;
+            }
+            if let Err(error) = windows::Win32::System::Threading::ResetEvent(signal.0) {
+                eprintln!("cloud reset: {error}");
+                break;
+            }
+            for request in rx.try_iter() {
                 match request {
-                    Request::Path(path) => {
-                        pending_path(&mut current, &mut source, &mut commands, &dirty, path)
-                    }
+                    Request::Stop => break 'events,
+                    Request::Path(path) => pending_path(
+                        &mut current,
+                        &mut source,
+                        &mut commands,
+                        &dirty,
+                        &signal,
+                        path,
+                    ),
                     Request::Invoke(version, index) => {
                         if version == revision {
                             if let Some(Some(c)) = commands.get(index) {
@@ -156,9 +237,7 @@ pub fn start(publish: impl Fn(Snapshot) + Send + 'static) -> mpsc::Sender<Reques
                     }
                 }
             }
-            if dirty.swap(false, Ordering::Relaxed) || refreshed.elapsed() >= Duration::from_secs(2)
-            {
-                refreshed = Instant::now();
+            if dirty.swap(false, Ordering::Relaxed) {
                 let mut next = Snapshot {
                     path: current.clone(),
                     ..Default::default()
@@ -218,17 +297,18 @@ pub fn start(publish: impl Fn(Snapshot) + Send + 'static) -> mpsc::Sender<Reques
         if let Some((old, token, _)) = source.take() {
             let _ = old.RemoveStatusUIChanged(token);
         }
+        commands.clear();
         RoUninitialize();
     });
-    tx
+    Ok(channel)
 }
 
-// Path changes use the same STA for factory creation, subscriptions and release.
 unsafe fn pending_path(
     current: &mut String,
     source: &mut Option<(IStorageProviderStatusUISource, i64, String)>,
     commands: &mut Vec<Option<IStorageProviderUICommand>>,
     dirty: &Arc<AtomicBool>,
+    signal: &Arc<Signal>,
     path: String,
 ) {
     if *current == path {
@@ -247,9 +327,10 @@ unsafe fn pending_path(
         ) {
             if let Ok(next) = factory.GetStatusUISource(&HSTRING::from(id)) {
                 let changed = dirty.clone();
+                let signal = signal.clone();
                 let handler = TypedEventHandler::new(move |_, _| {
                     changed.store(true, Ordering::Relaxed);
-                    Ok(())
+                    windows::Win32::System::Threading::SetEvent(signal.0)
                 });
                 let token = next.StatusUIChanged(&handler).unwrap_or(0);
                 *source = Some((next, token, label));
@@ -262,6 +343,32 @@ unsafe fn pending_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+    #[test]
+    fn last_sender_drop_wakes_and_releases_an_idle_provider_apartment() {
+        let (published, received) = mpsc::channel();
+        let sender = start(move |snapshot| {
+            let _ = published.send(snapshot.path);
+        })
+        .unwrap();
+        let signal = Arc::downgrade(&sender.0.signal);
+        sender
+            .send(Request::Path(r"C:\sw-native-cloud-idle-test".into()))
+            .unwrap();
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(5)).unwrap(),
+            r"C:\sw-native-cloud-idle-test"
+        );
+        let clone = sender.clone();
+        drop(sender);
+        assert!(signal.upgrade().is_some());
+        drop(clone);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while signal.upgrade().is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(signal.upgrade().is_none());
+    }
     #[test]
     fn root_boundary_does_not_expose_status_in_sibling_or_virtual_folder() {
         assert!(contains(

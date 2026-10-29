@@ -1,5 +1,4 @@
-# English for slint-win-explorer. The msgids are the keys the code uses; both Slint's
-# @tr() (bundled at build time) and src/i18n.rs read this file. Strings the shell has
+# English for slint-win-explorer. The msgids are the keys read by src/i18n.rs. Strings the shell has
 # itself (group names, default names, "free of") come from its resources instead.
 # Measured on the real Explorer with an English display language, or read from the same
 # resource in Windows' en-US language pack (tools/winstr.py) (2026-10-23).
@@ -104,10 +103,6 @@ msgstr "Show or hide the details pane."
 
 msgid "cmd.details"
 msgstr "Details"
-
-# Columns and properties
-msgid "column.name"
-msgstr "Name"
 
 msgid "column.modified"
 msgstr "Date modified"
@@ -375,9 +370,6 @@ msgstr "Devices and drives"
 msgid "tiles.network"
 msgstr "Network locations"
 
-msgid "file.new-text"
-msgstr "New Text Document"
-
 msgid "tab.close"
 msgstr "Close tab"
 
@@ -438,6 +430,26 @@ msgstr "Some associations were changed outside the app. Restore the original ass
 msgid "settings.default.error"
 msgstr "Could not update the default file manager: {}"
 
+msgid "settings.default.invalid-backup"
+msgstr "The original association backup is invalid. No unrelated keys were changed."
+
+msgid "settings.default.backup-unavailable"
+msgstr "The app backup folder is unavailable."
+
+msgid "settings.default.active-backup"
+msgstr "Restore the previous registration before enabling again."
+
+msgid "settings.default.busy"
+msgstr "Another app window is updating these settings. Try again."
+
+msgid "settings.default.missing-backup"
+msgstr "The original association backup is missing. The previous values cannot be restored safely."
+
+msgid "settings.default.conflict"
+msgstr "Another program changed an association. Undo that change before restoring the original values."
+
+msgid "settings.default.unsupported-handler"
+msgstr "An existing folder handler is incompatible with this setting."
 
 msgid "settings.default.invalid-backup"
 msgstr "The original association backup is invalid. No unrelated keys were changed."
@@ -460,25 +472,8 @@ msgstr "Another program changed an association. Undo that change before restorin
 msgid "settings.default.unsupported-handler"
 msgstr "An existing folder handler is incompatible with this setting."
 
+msgid "cmd.sort.tip"
+msgstr "Sort and group options."
 
-msgid "settings.default.invalid-backup"
-msgstr "The original association backup is invalid. No unrelated keys were changed."
-
-msgid "settings.default.backup-unavailable"
-msgstr "The app backup folder is unavailable."
-
-msgid "settings.default.active-backup"
-msgstr "Restore the previous registration before enabling again."
-
-msgid "settings.default.busy"
-msgstr "Another app window is updating these settings. Try again."
-
-msgid "settings.default.missing-backup"
-msgstr "The original association backup is missing. The previous values cannot be restored safely."
-
-msgid "settings.default.conflict"
-msgstr "Another program changed an association. Undo that change before restoring the original values."
-
-msgid "settings.default.unsupported-handler"
-msgstr "An existing folder handler is incompatible with this setting."
-
+msgid "cmd.view.tip"
+msgstr "Layout and view options."

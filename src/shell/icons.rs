@@ -8,7 +8,7 @@ use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_
 use windows::Win32::UI::Controls::{IImageList, ILD_TRANSPARENT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    IExtractIconW, IShellFolder, IShellIcon, SHGetFileInfoW, SHGetImageList,
+    IExtractIconW, IShellFolder, IShellIcon, IShellIconOverlay, SHGetFileInfoW, SHGetImageList,
     SHMapPIDLToSystemImageListIndex, SHFILEINFOW, SHGFI_ICON, SHGFI_OVERLAYINDEX, SHGFI_PIDL,
     SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_USEFILEATTRIBUTES, SHIL_EXTRALARGE, SHIL_JUMBO,
     SHIL_LARGE, SHIL_SMALL,
@@ -18,8 +18,22 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, I
 use super::com_init;
 
 const GIL_FORSHELL: u32 = 0x0002;
+const GIL_CHECKSHIELD: u32 = 0x0200;
 const GIL_ASYNC: u32 = 0x0020;
 const GIL_PERINSTANCE: u32 = 0x0002;
+
+pub fn command_svg_path(name: &str) -> std::path::PathBuf {
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    let theme = if super::theme::dark() {
+        "theme-dark"
+    } else {
+        "theme-light"
+    };
+    std::path::Path::new(&windir)
+        .join(r"SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-standard")
+        .join(theme)
+        .join(format!("{name}.svg"))
+}
 
 pub unsafe fn icon_of(
     folder: &IShellFolder,
@@ -30,17 +44,23 @@ pub unsafe fn icon_of(
     if is_link {
         return link_icon_of_pidl(abs);
     }
-    if let Ok(icon) = folder.cast::<IShellIcon>() {
-        if let Ok(index) = icon.GetIconOf(child, GIL_FORSHELL) {
-            return index as u32 & 0x00FF_FFFF;
-        }
-    }
-    let index = SHMapPIDLToSystemImageListIndex(folder, child, None);
-    if index >= 0 {
-        index as u32 & 0x00FF_FFFF
+    let index = folder
+        .cast::<IShellIcon>()
+        .ok()
+        .and_then(|icon| icon.GetIconOf(child, GIL_FORSHELL | GIL_CHECKSHIELD).ok())
+        .unwrap_or_else(|| SHMapPIDLToSystemImageListIndex(folder, child, None));
+    let base = if index >= 0 {
+        index as u32 & 0x00ff_ffff
     } else {
         0
+    };
+    if let Ok(provider) = folder.cast::<IShellIconOverlay>() {
+        let mut overlay = 0;
+        if provider.GetOverlayIndex(child, &mut overlay).is_ok() && (1..=15).contains(&overlay) {
+            return base | ((overlay as u32) << 24);
+        }
     }
+    base
 }
 
 pub unsafe fn has_own_icon(folder: &IShellFolder, child: *const ITEMIDLIST) -> bool {
@@ -56,7 +76,10 @@ pub unsafe fn has_own_icon(folder: &IShellFolder, child: *const ITEMIDLIST) -> b
 }
 
 pub fn generic_icon(path: &str) -> u32 {
-    let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+    let ext = std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy())
+        .unwrap_or_default();
     let wide = super::wide(&format!(".{ext}"));
     let mut info = SHFILEINFOW::default();
     let res = unsafe {
@@ -77,9 +100,15 @@ pub fn generic_icon(path: &str) -> u32 {
 
 pub fn file_icon(path: &str) -> u32 {
     com_init();
-    let Ok(pidl) = super::Pidl::parse(path) else { return 0 };
-    let Some(parent) = pidl.parent() else { return 0 };
-    let Ok(folder) = parent.folder() else { return 0 };
+    let Ok(pidl) = super::Pidl::parse(path) else {
+        return 0;
+    };
+    let Some(parent) = pidl.parent() else {
+        return 0;
+    };
+    let Ok(folder) = parent.folder() else {
+        return 0;
+    };
     unsafe { icon_of(&folder, pidl.last_id(), pidl.ptr(), false) }
 }
 
@@ -410,11 +439,12 @@ fn scaled_icon(path: &str, size: u32) -> Option<Rgba> {
     })
 }
 
-/// What an icon view draws for an item at `size`: a thumbnail fits a box inset by a 32nd
-/// of the size (rounded up) and sits on its bottom, centred (Explorer's layout); an icon fills it.
 pub fn view_picture(path: &str, size: u32) -> Result<Rgba, String> {
     use windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY;
     com_init();
+    if size > 48 && super::archive::is_root(path) {
+        return image_factory(path, size, Default::default(), true);
+    }
     if super::listing::settings().icons_only {
         return image_factory(
             path,
@@ -423,34 +453,47 @@ pub fn view_picture(path: &str, size: u32) -> Result<Rgba, String> {
             false,
         );
     }
-    // A folder's preview is drawn like an icon.
     if size < 256 && !std::path::Path::new(path).is_dir() {
         let inset = size.div_ceil(32);
-        if let Ok(thumb) = image_factory(path, size - 2 * inset, SIIGBF_THUMBNAILONLY, false) {
-            return Ok(place_bottom(&thumb, size, inset));
+        if let Ok(thumb) = image_factory(path, size - 2 * inset + 1, SIIGBF_THUMBNAILONLY, false) {
+            return Ok(compressed_marker(
+                place_bottom(&thumb, size, inset),
+                path,
+                size.div_ceil(4).saturating_sub(1),
+            ));
         }
     }
     thumbnail(path, size)
 }
 
-/// The aggregate library view uses its 48px shell list image enlarged at 96px,
-/// rather than extracting a different 96px resource from the file association.
 pub fn library_picture(path: &str, size: u32) -> Result<Rgba, String> {
-    if size != 96 || std::path::Path::new(path).is_dir() {return view_picture(path,size);}
+    if size != 96 || std::path::Path::new(path).is_dir() {
+        return view_picture(path, size);
+    }
     com_init();
     if !super::listing::settings().icons_only {
-        let inset=size.div_ceil(32);
-        if let Ok(thumb)=image_factory(path,size-2*inset,windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,false) {
-            return Ok(place_bottom(&thumb,size,inset));
+        let inset = size.div_ceil(32);
+        if let Ok(thumb) = image_factory(
+            path,
+            size - 2 * inset,
+            windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
+            false,
+        ) {
+            return Ok(place_bottom(&thumb, size, inset));
         }
     }
-    let set=super::ItemSet::new(&[path.to_string()])?;
-    let index=unsafe {icon_of(&set.folder,set.children()[0],set.items[0].ptr(),path.to_lowercase().ends_with(".lnk"))};
-    Ok(resize(&icon(index,48)?,size))
+    let set = super::ItemSet::new(&[path.to_string()])?;
+    let index = unsafe {
+        icon_of(
+            &set.folder,
+            set.children()[0],
+            set.items[0].ptr(),
+            path.to_lowercase().ends_with(".lnk"),
+        )
+    };
+    Ok(resize(&icon(index, 48)?, size))
 }
 
-/// A discovered device's parsing name can discard provider-specific image data.
-/// Ask the image factory for the enumerated identity, as the native folder view does.
 pub fn network_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String> {
     if id.is_empty() {
         return view_picture(path, size);
@@ -465,14 +508,12 @@ pub fn network_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String>
     }
 }
 
-/// `src` on a transparent `size` square, centred across and `inset` above the bottom.
 fn place_bottom(src: &Rgba, size: u32, inset: u32) -> Rgba {
-    // The factory may hand back a bigger cached thumbnail.
-    let fit = size - 2 * inset;
+    let fit = size - 2 * inset + 1;
     let scaled;
     let src = if src.width > fit || src.height > fit {
         let k = (fit as f32 / src.width as f32).min(fit as f32 / src.height as f32);
-        scaled = resize_to(
+        scaled = area_resize(
             src,
             ((src.width as f32 * k).round() as u32).max(1),
             ((src.height as f32 * k).round() as u32).max(1),
@@ -484,7 +525,6 @@ fn place_bottom(src: &Rgba, size: u32, inset: u32) -> Rgba {
     let n = size as usize;
     let mut pixels = vec![0u8; n * n * 4];
     let (w, h) = (src.width.min(size) as usize, src.height.min(size) as usize);
-    // Measured: a pixel up and left of centred-on-the-inset-box.
     let x0 = ((n - w) / 2).saturating_sub(1);
     let y0 = (n - inset as usize).saturating_sub(h + 1);
     for y in 0..h {
@@ -522,8 +562,10 @@ fn resize(src: &Rgba, size: u32) -> Rgba {
     resize_to(src, size, size)
 }
 
-/// Resize to `w` by `h`: box-averaged when shrinking, bilinear when growing.
 fn resize_to(src: &Rgba, w: u32, h: u32) -> Rgba {
+    if w >= src.width && h >= src.height {
+        return bilinear_resize(src, w, h);
+    }
     let (sw, sh) = (src.width as usize, src.height as usize);
     let (nw, nh) = (w as usize, h as usize);
     let pre: Vec<[f32; 4]> = src
@@ -544,40 +586,25 @@ fn resize_to(src: &Rgba, w: u32, h: u32) -> Rgba {
     for y in 0..nh {
         for x in 0..nw {
             let mut px = [0f32; 4];
-            if kx > 1.0 || ky > 1.0 {
-                // Shrinking: the average of the source pixels under this one.
-                let (x0, x1) = (
-                    (x as f32 * kx) as usize,
-                    (((x + 1) as f32 * kx).ceil() as usize).min(sw).max(1),
-                );
-                let (y0, y1) = (
-                    (y as f32 * ky) as usize,
-                    (((y + 1) as f32 * ky).ceil() as usize).min(sh).max(1),
-                );
-                let mut count = 0.0;
-                for sy in y0.min(sh - 1)..y1 {
-                    for sx in x0.min(sw - 1)..x1 {
-                        for (c, v) in px.iter_mut().enumerate() {
-                            *v += pre[sy * sw + sx][c];
-                        }
-                        count += 1.0;
+            let (x0, x1) = (
+                (x as f32 * kx) as usize,
+                (((x + 1) as f32 * kx).ceil() as usize).min(sw).max(1),
+            );
+            let (y0, y1) = (
+                (y as f32 * ky) as usize,
+                (((y + 1) as f32 * ky).ceil() as usize).min(sh).max(1),
+            );
+            let mut count = 0.0;
+            for sy in y0.min(sh - 1)..y1 {
+                for sx in x0.min(sw - 1)..x1 {
+                    for (c, v) in px.iter_mut().enumerate() {
+                        *v += pre[sy * sw + sx][c];
                     }
+                    count += 1.0;
                 }
-                for v in px.iter_mut() {
-                    *v /= count;
-                }
-            } else {
-                let sx = ((x as f32 + 0.5) * kx - 0.5).clamp(0.0, sw as f32 - 1.0);
-                let sy = ((y as f32 + 0.5) * ky - 0.5).clamp(0.0, sh as f32 - 1.0);
-                let (ix, iy) = (sx.floor() as usize, sy.floor() as usize);
-                let (fx, fy) = (sx - ix as f32, sy - iy as f32);
-                let at =
-                    |dx: usize, dy: usize| pre[(iy + dy).min(sh - 1) * sw + (ix + dx).min(sw - 1)];
-                for (c, v) in px.iter_mut().enumerate() {
-                    let top = at(0, 0)[c] * (1.0 - fx) + at(1, 0)[c] * fx;
-                    let bottom = at(0, 1)[c] * (1.0 - fx) + at(1, 1)[c] * fx;
-                    *v = top * (1.0 - fy) + bottom * fy;
-                }
+            }
+            for v in px.iter_mut() {
+                *v /= count;
             }
             let a = px[3] / 255.0;
             let un = |c: f32| {
@@ -654,15 +681,78 @@ fn extracted_icon(path: &str, size: u32) -> Option<Rgba> {
     }
 }
 
-/// An item's picture for the icon views: its thumbnail when it has one (images, folder
-/// previews), else its icon resource at that size, else the nearest system icon scaled.
+pub fn stack_picture() -> Result<Rgba, String> {
+    use windows::Win32::UI::Shell::{
+        SHGetStockIconInfo, SHGSI_ICONLOCATION, SHSTOCKICONINFO, SIID_STACK,
+    };
+    com_init();
+    let mut info = SHSTOCKICONINFO {
+        cbSize: std::mem::size_of::<SHSTOCKICONINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        SHGetStockIconInfo(SIID_STACK, SHGSI_ICONLOCATION, &mut info)
+            .map_err(|error| error.message())?;
+    }
+    let end = info
+        .szPath
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(info.szPath.len());
+    let path = String::from_utf16_lossy(&info.szPath[..end]);
+    icon_at(&path, info.iIcon, 96).ok_or_else(|| {
+        format!(
+            "Stock stack icon resource unavailable: {path},{}",
+            info.iIcon
+        )
+    })
+}
+
+pub fn pane_icon(path: &str) -> Result<Rgba, String> {
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY, SIIGBF_RESIZETOFIT,
+    };
+    com_init();
+    unsafe {
+        let path = super::wide(path);
+        let factory: IShellItemImageFactory =
+            SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)
+                .map_err(|error| error.message())?;
+        factory_picture_with_flags(&factory, 28, SIIGBF_ICONONLY | SIIGBF_RESIZETOFIT, true)
+    }
+}
+
+pub fn preview_picture(path: &str) -> Result<Rgba, String> {
+    com_init();
+    let image = image_factory(
+        path,
+        256,
+        windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
+        true,
+    )?;
+    let scale = (256.0 / image.width as f32)
+        .min(256.0 / image.height as f32)
+        .min(1.0);
+    if scale == 1.0 {
+        return Ok(image);
+    }
+    Ok(area_resize(
+        &image,
+        (image.width as f32 * scale).round().max(1.0) as u32,
+        (image.height as f32 * scale).round().max(1.0) as u32,
+    ))
+}
+
 pub fn thumbnail(path: &str, size: u32) -> Result<Rgba, String> {
     com_init();
-    // Explorer's extra large thumbnails are its 128px ones doubled; icons are drawn at 256.
     if size >= 256 {
         use windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY;
         if let Ok(thumb) = image_factory(path, size / 2, SIIGBF_THUMBNAILONLY, true) {
-            return Ok(pixel_scale(&thumb, size));
+            return Ok(compressed_marker(
+                pixel_scale(&thumb, size),
+                path,
+                size.div_ceil(4).saturating_sub(1),
+            ));
         }
     }
     picture(path, size, false)
@@ -705,7 +795,6 @@ pub fn pane_thumbnail(path: &str, w: u32, h: u32) -> Result<Rgba, String> {
     Ok(canvas)
 }
 
-/// Shrinks by averaging each target pixel's source area (premultiplied).
 fn area_resize(src: &Rgba, w: u32, h: u32) -> Rgba {
     let (sw, sh) = (src.width as usize, src.height as usize);
     let (fx, fy) = (sw as f32 / w as f32, sh as f32 / h as f32);
@@ -793,16 +882,31 @@ pub fn shell_picture(path: &str, size: u32) -> Result<Rgba, String> {
     com_init();
     image_factory(path, size, Default::default(), false)
 }
-/// Gallery needs a real thumbnail, never a file-type icon while a cloud/cache
-/// provider is still working. Its enumerated identity carries search metadata.
-pub fn gallery_picture(path:&str,id:&[u8],size:u32)->Result<Rgba,String>{
+pub fn gallery_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String> {
     com_init();
-    if !id.is_empty(){unsafe{
-        if let Ok(factory)=windows::Win32::UI::Shell::SHCreateItemFromIDList::<windows::Win32::UI::Shell::IShellItemImageFactory>(id.as_ptr().cast()){
-            if let Ok(image)=factory_picture(&factory,size,windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,false){return Ok(image);}
+    if !id.is_empty() {
+        unsafe {
+            if let Ok(factory) = windows::Win32::UI::Shell::SHCreateItemFromIDList::<
+                windows::Win32::UI::Shell::IShellItemImageFactory,
+            >(id.as_ptr().cast())
+            {
+                if let Ok(image) = factory_picture(
+                    &factory,
+                    size,
+                    windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
+                    false,
+                ) {
+                    return Ok(image);
+                }
+            }
         }
-    }}
-    image_factory(path,size,windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,false)
+    }
+    image_factory(
+        path,
+        size,
+        windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
+        false,
+    )
 }
 
 /// The view's shell icon, including GIL_FORSHELL (which differs from SHGetFileInfo's
@@ -867,9 +971,6 @@ pub fn tab_drag_picture(path: &str, size: u32) -> Result<Rgba, String> {
 fn picture(path: &str, size: u32, keep_frame: bool) -> Result<Rgba, String> {
     let link = path.to_lowercase().ends_with(".lnk");
     let mut picture = item_picture(path, size, keep_frame)?;
-    // A shortcut's arrow, unscaled in the bottom-left corner: the 32px overlay image over
-    // 48px icons (exact), the 48px one over 96px ones and the 96px one over 256px ones (the
-    // real's are a little bolder).
     if link && size >= 48 && picture.width == size && picture.height == size {
         if let Some(arrow) = link_arrow(match size {
             0..=48 => 32,
@@ -882,7 +983,6 @@ fn picture(path: &str, size: u32, keep_frame: bool) -> Result<Rgba, String> {
     Ok(picture)
 }
 
-/// The shortcut overlay image at `size` (imageres.dll's arrow, as the system image list's).
 fn link_arrow(size: u32) -> Option<Rgba> {
     thread_local! {
         static ARROWS: std::cell::RefCell<std::collections::HashMap<u32, Option<Rgba>>> = std::cell::RefCell::new(Default::default());
@@ -892,7 +992,7 @@ fn link_arrow(size: u32) -> Option<Rgba> {
             .entry(size)
             .or_insert_with(|| {
                 let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
-                icon_at(&format!(r"{windir}\System32\imageres.dll"), -163, size)
+                icon_at(&format!(r"{windir}\System32\imageres.dll"), -163, size).map(straight_icon)
             })
             .clone()
     })
@@ -925,31 +1025,140 @@ fn draw_over(base: &mut Rgba, top: &Rgba, x: u32, y: u32) {
 fn item_picture(path: &str, size: u32, keep_frame: bool) -> Result<Rgba, String> {
     use windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY;
     if let Ok(thumb) = image_factory(path, size, SIIGBF_THUMBNAILONLY, keep_frame) {
-        return Ok(thumb);
+        return Ok(compressed_marker(
+            thumb,
+            path,
+            size.div_ceil(4).saturating_sub(1),
+        ));
     }
-    if let Some(icon) = extracted_icon(path, size).filter(|i| i.width == size) {
-        return Ok(icon);
-    }
-    // A shortcut to a file shows its target's type.
-    let typed = if path.to_lowercase().ends_with(".lnk") {
-        super::ops::link_file(path).unwrap_or_default()
-    } else {
-        path.to_string()
+    let image = (|| {
+        if let Some(icon) = extracted_icon(path, size).filter(|i| i.width == size) {
+            return Ok(icon);
+        }
+        let typed = if path.to_lowercase().ends_with(".lnk") {
+            super::ops::link_file(path).unwrap_or_default()
+        } else {
+            path.to_string()
+        };
+        if size > 48 {
+            match type_icon(&typed, size) {
+                Some(Some(icon)) => return Ok(icon),
+                Some(None) => return image_factory(path, size, Default::default(), keep_frame),
+                None => {}
+            }
+        }
+        if let Some(icon) = scaled_icon(path, size) {
+            return Ok(icon);
+        }
+        image_factory(path, size, Default::default(), keep_frame)
+    })()?;
+    Ok(compressed_marker(image, path, (size / 2).max(8)))
+}
+
+fn compressed_marker(mut image: Rgba, path: &str, size: u32) -> Rgba {
+    use windows::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_COMPRESSED, INVALID_FILE_ATTRIBUTES,
     };
-    // Past the system image list's sizes (96px) Explorer draws the type's icon resource at
-    // the size, as extracting it gives (a .dll, a .bat, an .exe without icons); a packaged
-    // app's PNG it scales much as the image factory does.
-    if size > 48 {
-        match type_icon(&typed, size) {
-            Some(Some(icon)) => return Ok(icon),
-            Some(None) => return image_factory(path, size, Default::default(), keep_frame),
-            None => {}
+    let attributes = unsafe { GetFileAttributesW(PCWSTR(super::wide(path).as_ptr())) };
+    if attributes == INVALID_FILE_ATTRIBUTES || attributes & FILE_ATTRIBUTE_COMPRESSED.0 == 0 {
+        return image;
+    }
+    static MARKERS: std::sync::OnceLock<Option<[Rgba; 2]>> = std::sync::OnceLock::new();
+    let markers = MARKERS.get_or_init(|| {
+        use windows::Win32::UI::Shell::{
+            SHGetStockIconInfo, SHGSI_ICONLOCATION, SHSTOCKICONID, SHSTOCKICONINFO,
+        };
+        unsafe {
+            let mut info = SHSTOCKICONINFO {
+                cbSize: std::mem::size_of::<SHSTOCKICONINFO>() as u32,
+                ..Default::default()
+            };
+            if let Err(error) =
+                SHGetStockIconInfo(SHSTOCKICONID(179), SHGSI_ICONLOCATION, &mut info)
+            {
+                eprintln!("compression icon: {error}");
+                return None;
+            }
+            let end = info
+                .szPath
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(info.szPath.len());
+            let file = String::from_utf16_lossy(&info.szPath[..end]);
+            Some([
+                straight_icon(icon_at(&file, info.iIcon, 32)?),
+                straight_icon(icon_at(&file, info.iIcon, 256)?),
+            ])
+        }
+    });
+    if let Some(markers) = markers {
+        let size = size.min(image.width).min(image.height);
+        if size > 0 {
+            let marker = if size < 32 {
+                bilinear_resize(&markers[0], size, size)
+            } else {
+                area_resize(&markers[1], size, size)
+            };
+            let x = image.width - size;
+            draw_over(&mut image, &marker, x, 0);
         }
     }
-    if let Some(icon) = scaled_icon(path, size) {
-        return Ok(icon);
+    image
+}
+
+fn straight_icon(mut image: Rgba) -> Rgba {
+    for pixel in image.pixels.chunks_exact_mut(4) {
+        let alpha = pixel[3] as u32;
+        if alpha > 0 {
+            for channel in &mut pixel[..3] {
+                *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
     }
-    image_factory(path, size, Default::default(), keep_frame)
+    image
+}
+
+fn bilinear_resize(source: &Rgba, width: u32, height: u32) -> Rgba {
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let sx = ((x as f32 + 0.5) * source.width as f32 / width as f32 - 0.5)
+                .clamp(0.0, source.width as f32 - 1.0);
+            let sy = ((y as f32 + 0.5) * source.height as f32 / height as f32 - 0.5)
+                .clamp(0.0, source.height as f32 - 1.0);
+            let ix = sx.floor() as u32;
+            let iy = sy.floor() as u32;
+            let fx = sx - ix as f32;
+            let fy = sy - iy as f32;
+            let mut value = [0.0; 4];
+            for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+                for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+                    let index = (((iy + dy).min(source.height - 1) * source.width
+                        + (ix + dx).min(source.width - 1))
+                        * 4) as usize;
+                    let pixel = &source.pixels[index..index + 4];
+                    let alpha = pixel[3] as f32 / 255.0;
+                    for channel in 0..3 {
+                        value[channel] += pixel[channel] as f32 * alpha * wx * wy;
+                    }
+                    value[3] += alpha * wx * wy;
+                }
+            }
+            for channel in 0..3 {
+                pixels.push(if value[3] > 0.0 {
+                    (value[channel] / value[3]).round().clamp(0.0, 255.0) as u8
+                } else {
+                    0
+                });
+            }
+            pixels.push((value[3] * 255.0).round().clamp(0.0, 255.0) as u8);
+        }
+    }
+    Rgba {
+        width,
+        height,
+        pixels,
+    }
 }
 
 fn image_factory(
@@ -974,25 +1183,33 @@ fn factory_picture(
     only: windows::Win32::UI::Shell::SIIGBF,
     keep_frame: bool,
 ) -> Result<Rgba, String> {
-    use windows::Win32::Foundation::SIZE;
     use windows::Win32::UI::Shell::{SIIGBF_BIGGERSIZEOK, SIIGBF_RESIZETOFIT};
+    factory_picture_with_flags(
+        factory,
+        size,
+        SIIGBF_RESIZETOFIT | SIIGBF_BIGGERSIZEOK | only,
+        keep_frame,
+    )
+}
+
+fn factory_picture_with_flags(
+    factory: &windows::Win32::UI::Shell::IShellItemImageFactory,
+    size: u32,
+    flags: windows::Win32::UI::Shell::SIIGBF,
+    keep_frame: bool,
+) -> Result<Rgba, String> {
+    use windows::Win32::Foundation::SIZE;
     unsafe {
         let side = size as i32;
         let bitmap = factory
-            .GetImage(
-                SIZE { cx: side, cy: side },
-                SIIGBF_RESIZETOFIT | SIIGBF_BIGGERSIZEOK | only,
-            )
-            .map_err(|e| e.message())?;
+            .GetImage(SIZE { cx: side, cy: side }, flags)
+            .map_err(|error| error.message())?;
         let (w, h, pixels) = bitmap_pixels(bitmap);
         let _ = DeleteObject(HGDIOBJ::from(bitmap));
-        // Extra large keeps the frame, as Explorer does.
         let (w, h, pixels) = match (!keep_frame).then(|| unframe(w, h, &pixels)).flatten() {
             Some(scaled) => (w, h, scaled),
             None => (w, h, pixels),
         };
-        // A picture without alpha (a black PNG saved as RGB) comes with alpha 0 everywhere:
-        // Explorer draws it opaque.
         let opaque = pixels.iter().all(|px| px >> 24 == 0);
         let mut rgba = Vec::with_capacity(pixels.len() * 4);
         for px in &pixels {
@@ -1001,7 +1218,11 @@ fn factory_picture(
                 rgba.extend_from_slice(&[r, g, b, 255]);
                 continue;
             }
-            // The factory hands back premultiplied alpha.
+            let a = if flags.0 & windows::Win32::UI::Shell::SIIGBF_ICONONLY.0 != 0 {
+                a.max(r).max(g).max(b)
+            } else {
+                a
+            };
             let un = |c: u8| {
                 if a == 0 {
                     0
@@ -1066,7 +1287,7 @@ fn type_icon(path: &str, size: u32) -> Option<Option<Rgba>> {
 }
 
 /// `%NAME%` references replaced by the environment's values.
-fn expand_env(text: &str) -> String {
+pub(super) fn expand_env(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(start) = rest.find('%') {
@@ -1113,7 +1334,8 @@ pub fn icon_at(file: &str, index: i32, size: u32) -> Option<Rgba> {
 
 pub fn small_icon_at(location: &str) -> Option<Rgba> {
     use windows::Win32::UI::Shell::{SHDefExtractIconW, SHLoadIndirectString};
-    let location = location.trim().trim_matches('"');
+    let expanded = expand_env(location);
+    let location = expanded.trim().trim_matches('"');
     if location.starts_with('@') {
         let w = super::wide(location);
         let mut buf = [0u16; 1024];
@@ -1121,46 +1343,72 @@ pub fn small_icon_at(location: &str) -> Option<Rgba> {
         let n = buf.iter().position(|c| *c == 0).unwrap_or(0);
         let resolved = String::from_utf16_lossy(&buf[..n]);
         let path = std::path::Path::new(&resolved);
-        // PRI resolution commonly picks the 44px tile's scale-100 bitmap. Modern
-        // menu image sources instead select the unplated 16px target-size asset.
         if let (Some(parent), Some(stem)) =
             (path.parent(), path.file_stem().and_then(|s| s.to_str()))
         {
-            let base = stem.split(".scale-").next().unwrap_or(stem);
-            let light = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-                .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
-                .and_then(|k| k.get_value::<u32, _>("AppsUseLightTheme"))
-                .unwrap_or(0)
-                != 0;
-            let form = if light { "lightunplated" } else { "unplated" };
-            for name in [
-                format!("{base}.targetsize-16_altform-{form}.png"),
-                format!("{base}.altform-{form}_targetsize-16.png"),
-                format!("{base}.targetsize-16.png"),
-            ] {
-                let candidate = parent.join(name);
-                if candidate.is_file() {
-                    return thumbnail(&candidate.to_string_lossy(), 16).ok();
+            let mut parents = Vec::new();
+            if let Some((package, resource)) = location
+                .strip_prefix("@{")
+                .and_then(|value| value.split_once('?'))
+            {
+                if let Some(relative) = resource.split("/Files/").nth(1) {
+                    let key = format!(
+                        r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages\{package}"
+                    );
+                    if let Ok(root) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+                        .open_subkey(key)
+                        .and_then(|key| key.get_value::<String, _>("PackageRootFolder"))
+                    {
+                        if let Some(parent) = std::path::Path::new(&root)
+                            .join(relative.trim_end_matches('}'))
+                            .parent()
+                        {
+                            parents.push(parent.to_owned());
+                        }
+                    }
+                }
+            }
+            parents.push(parent.to_owned());
+            let base = stem
+                .split(".scale-")
+                .next()
+                .unwrap_or(stem)
+                .split(".targetsize-")
+                .next()
+                .unwrap_or(stem);
+            for parent in parents {
+                if let Some(icon) = qualified_bitmap(&parent.join(format!("{base}.png"))) {
+                    return Some(icon);
                 }
             }
         }
-        return thumbnail(&resolved, 16).ok();
+        return bitmap_icon(&resolved);
     }
-    let lower = location.to_lowercase();
+    let (file, index) = match location.rsplit_once(',') {
+        Some((file, index)) if index.trim().parse::<i32>().is_ok() => {
+            (file, index.trim().parse::<i32>().unwrap())
+        }
+        _ => (location, 0),
+    };
+    let lower = file.to_lowercase();
     if [".png", ".jpg", ".jpeg", ".bmp"]
         .iter()
         .any(|e| lower.ends_with(e))
     {
-        return thumbnail(location, 16).ok();
+        return qualified_bitmap(std::path::Path::new(file)).or_else(|| bitmap_icon(file));
     }
-    let (file, index) = match location.rsplit_once(',') {
-        Some((f, i)) if i.trim().parse::<i32>().is_ok() => (f, i.trim().parse::<i32>().unwrap()),
-        _ => (location, 0),
-    };
     let w = super::wide(file);
     let mut small = HICON::default();
     unsafe {
-        if SHDefExtractIconW(PCWSTR(w.as_ptr()), index, 0, None, Some(&mut small), 16).is_err()
+        if SHDefExtractIconW(
+            PCWSTR(w.as_ptr()),
+            index,
+            0,
+            None,
+            Some(&mut small),
+            16 | (16 << 16),
+        )
+        .is_err()
             || small.is_invalid()
         {
             return None;
@@ -1169,4 +1417,152 @@ pub fn small_icon_at(location: &str) -> Option<Rgba> {
         let _ = DestroyIcon(small);
         rgba
     }
+}
+
+fn bitmap_icon(path: &str) -> Option<Rgba> {
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    com_init();
+    let result = (|| -> windows::core::Result<Rgba> {
+        unsafe {
+            let factory: IWICImagingFactory =
+                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let filename = super::wide(path);
+            let decoder = factory.CreateDecoderFromFilename(
+                PCWSTR(filename.as_ptr()),
+                None,
+                windows::Win32::Foundation::GENERIC_READ,
+                WICDecodeMetadataCacheOnLoad,
+            )?;
+            let frame = decoder.GetFrame(0)?;
+            let (mut width, mut height) = (0, 0);
+            frame.GetSize(&mut width, &mut height)?;
+            if width == 0 || height == 0 {
+                return Err(windows::Win32::Foundation::E_INVALIDARG.into());
+            }
+            let mut source: IWICBitmapSource = frame.cast()?;
+            let scale = (16.0 / width as f64).min(16.0 / height as f64);
+            let target = (
+                (width as f64 * scale).round().clamp(1.0, 16.0) as u32,
+                (height as f64 * scale).round().clamp(1.0, 16.0) as u32,
+            );
+            if target != (width, height) {
+                let scaler = factory.CreateBitmapScaler()?;
+                scaler.Initialize(&source, target.0, target.1, WICBitmapInterpolationModeFant)?;
+                source = scaler.cast()?;
+            }
+            let converter = factory.CreateFormatConverter()?;
+            converter.Initialize(
+                &source,
+                &GUID_WICPixelFormat32bppRGBA,
+                WICBitmapDitherTypeNone,
+                None,
+                0.0,
+                WICBitmapPaletteTypeCustom,
+            )?;
+            let mut data = vec![0; (target.0 * target.1 * 4) as usize];
+            converter.CopyPixels(std::ptr::null(), target.0 * 4, &mut data)?;
+            let mut pixels = vec![0; 16 * 16 * 4];
+            let left = (16 - target.0) / 2;
+            let top = (16 - target.1) / 2;
+            for row in 0..target.1 {
+                let start = (((top + row) * 16 + left) * 4) as usize;
+                let source = (row * target.0 * 4) as usize;
+                pixels[start..start + target.0 as usize * 4]
+                    .copy_from_slice(&data[source..source + target.0 as usize * 4]);
+            }
+            Ok(Rgba {
+                width: 16,
+                height: 16,
+                pixels,
+            })
+        }
+    })();
+    match result {
+        Ok(image) => Some(image),
+        Err(error) => {
+            eprintln!("menu bitmap {path}: {error}");
+            thumbnail(path, 16).ok()
+        }
+    }
+}
+
+pub fn small_namespace_icon(path: &str) -> Option<Rgba> {
+    use windows::Win32::UI::Shell::{
+        BHID_SFUIObject, IExtractIconW, IShellItem, SHCreateItemFromParsingName,
+    };
+    com_init();
+    unsafe {
+        let path = super::wide(path);
+        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None).ok()?;
+        let extract: IExtractIconW = item.BindToHandler(None, &BHID_SFUIObject).ok()?;
+        let mut location = [0u16; 2048];
+        let (mut index, mut flags) = (0, 0);
+        extract
+            .GetIconLocation(2, &mut location, &mut index, &mut flags)
+            .ok()?;
+        let length = location
+            .iter()
+            .position(|&value| value == 0)
+            .unwrap_or(location.len());
+        let name = String::from_utf16_lossy(&location[..length]);
+        if let Some((file, scale)) = name.rsplit_once(".png-") {
+            if scale.parse::<u32>().is_ok() {
+                if let Some(icon) = qualified_bitmap(std::path::Path::new(&format!("{file}.png"))) {
+                    return Some(icon);
+                }
+            }
+        }
+        let (mut large, mut small) = (HICON::default(), HICON::default());
+        let result = extract.Extract(
+            PCWSTR(location.as_ptr()),
+            index as u32,
+            Some(&mut large),
+            Some(&mut small),
+            16 | (16 << 16),
+        );
+        let icon = if small.is_invalid() { large } else { small };
+        let image = if result.is_ok() && !icon.is_invalid() {
+            hicon_to_rgba(icon).ok().map(straight_icon)
+        } else {
+            None
+        };
+        for handle in [
+            large,
+            if small == large {
+                HICON::default()
+            } else {
+                small
+            },
+        ] {
+            if !handle.is_invalid() {
+                if let Err(error) = DestroyIcon(handle) {
+                    eprintln!("namespace menu icon release: {error}");
+                }
+            }
+        }
+        image
+    }
+}
+
+fn qualified_bitmap(path: &std::path::Path) -> Option<Rgba> {
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_str()?;
+    let base = stem.split(".scale-").next()?.split(".targetsize-").next()?;
+    let form = if super::theme::dark() {
+        "unplated"
+    } else {
+        "lightunplated"
+    };
+    for name in [
+        format!("{base}.targetsize-16_altform-{form}.png"),
+        format!("{base}.altform-{form}_targetsize-16.png"),
+        format!("{base}.targetsize-16.png"),
+    ] {
+        let path = parent.join(name);
+        if path.is_file() {
+            return bitmap_icon(&path.to_string_lossy());
+        }
+    }
+    None
 }

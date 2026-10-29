@@ -1,10 +1,8 @@
-//! App-owned destination list and native taskbar identity. Never edit Taskband,
-//! Explorer's destination list, global Recent documents or taskbar-pinned links.
 use super::{wide, Pidl};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, sync::mpsc};
+use std::{cell::RefCell, collections::HashMap, sync::mpsc};
 use windows::{
-    core::{w, Interface, PCWSTR},
+    core::{Interface, PCWSTR},
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, LPARAM, PROPERTYKEY, WPARAM},
         Storage::EnhancedStorage::*,
@@ -28,7 +26,7 @@ const KEYS: [PROPERTYKEY; 4] = [
     PKEY_AppUserModel_RelaunchIconResource,
     PKEY_AppUserModel_ID,
 ];
-thread_local! {static ICONS:RefCell<Option<(HICON,HICON)>>=const{RefCell::new(None)};}
+thread_local! {static ICONS:RefCell<HashMap<usize, (HICON,HICON)>>=RefCell::new(HashMap::new());}
 
 /// CommandLineToArgvW quoting, including a volume root's final backslash.
 pub fn quote(arg: &str) -> String {
@@ -106,7 +104,9 @@ pub fn window(hwnd: HWND) -> windows::core::Result<()> {
                 Some(WPARAM(0)),
                 Some(LPARAM(small.0 as _)),
             );
-            ICONS.with(|icons| *icons.borrow_mut() = Some((big, small)));
+            let previous =
+                ICONS.with(|icons| icons.borrow_mut().insert(hwnd.0 as usize, (big, small)));
+            release_icons(previous);
         }
         Ok(())
     }
@@ -120,16 +120,19 @@ pub fn close(hwnd: HWND) {
         }
         SendMessageW(hwnd, WM_SETICON, Some(WPARAM(0)), Some(LPARAM(0)));
         SendMessageW(hwnd, WM_SETICON, Some(WPARAM(1)), Some(LPARAM(0)));
-        ICONS.with(|icons| {
-            if let Some((big, small)) = icons.borrow_mut().take() {
-                if !big.is_invalid() {
-                    let _ = DestroyIcon(big);
-                }
-                if !small.is_invalid() {
-                    let _ = DestroyIcon(small);
+        let icons = ICONS.with(|icons| icons.borrow_mut().remove(&(hwnd.0 as usize)));
+        release_icons(icons);
+    }
+}
+fn release_icons(icons: Option<(HICON, HICON)>) {
+    if let Some((big, small)) = icons {
+        for icon in [big, small] {
+            if !icon.is_invalid() {
+                if let Err(error) = unsafe { DestroyIcon(icon) } {
+                    eprintln!("taskbar icon cleanup: {error}");
                 }
             }
-        });
+        }
     }
 }
 pub fn history_enabled() -> bool {
@@ -298,7 +301,7 @@ unsafe fn removed_path(link: &IShellLinkW) -> Option<String> {
     link.GetArguments(&mut args).ok()?;
     let len = args.iter().position(|&c| c == 0).unwrap_or(args.len());
     let command = wide(&format!(
-        "slint.exe {}",
+        "slint-win-explorer.exe {}",
         String::from_utf16_lossy(&args[..len])
     ));
     let mut count = 0;
@@ -404,9 +407,6 @@ pub fn start() -> mpsc::Sender<String> {
                 eprintln!("jump list: {}", e.message());
             }
         }
-        unsafe {
-            CoUninitialize();
-        }
     });
     tx
 }
@@ -414,6 +414,7 @@ pub fn start() -> mpsc::Sender<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::core::w;
     #[test]
     fn native_window_properties_roundtrip_and_release_without_taskbar_pinning() {
         super::super::com_init();
@@ -461,7 +462,38 @@ mod tests {
                 let text = PropVariantToStringAlloc(&value).unwrap();
                 assert_eq!(super::super::take_pwstr(text), expected);
             }
+            let second = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("Slint Explorer second metadata test"),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                1,
+                1,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let _second_owned = Window(second);
+            window(second).unwrap();
+            let second_icon = SendMessageW(second, WM_GETICON, Some(WPARAM(1)), None);
+            assert_ne!(second_icon.0, 0);
+            assert!(ICONS.with(|icons| icons.borrow().contains_key(&(second.0 as usize))));
             close(hwnd);
+            assert_eq!(
+                SendMessageW(second, WM_GETICON, Some(WPARAM(1)), None),
+                second_icon
+            );
+            let second_store: IPropertyStore = SHGetPropertyStoreForWindow(second).unwrap();
+            let value = second_store.GetValue(&PKEY_AppUserModel_ID).unwrap();
+            assert_eq!(
+                super::super::take_pwstr(PropVariantToStringAlloc(&value).unwrap()),
+                APP_ID
+            );
+            assert!(ICONS.with(|icons| !icons.borrow().contains_key(&(hwnd.0 as usize))));
             assert!(store.GetValue(&PKEY_AppUserModel_ID).unwrap().is_empty());
         }
     }

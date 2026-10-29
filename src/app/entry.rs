@@ -1,12 +1,10 @@
-//! External folder launches. Plain/native CLI forms create windows on this reference;
-//! explicit --reuse-window/--new-tab requests use a bounded same-executable broker.
-use super::{ids, with_app, AfterLoad, App};
+use super::ids;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::cell::RefCell;
 use windows::{
     core::{w, BOOL, PCWSTR},
     Win32::{
-        Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WPARAM},
         Globalization::{CompareStringOrdinal, CSTR_EQUAL},
         Storage::FileSystem::{GetFullPathNameW, GetLongPathNameW},
         System::{
@@ -54,12 +52,12 @@ fn full_path(path: &str) -> Result<String, String> {
     }
 }
 pub fn normalize(path: &str) -> Result<String, String> {
-    if ids::is_settings(path) { return Ok(ids::SETTINGS.into()); }
+    if ids::is_settings(path) {
+        return Ok(ids::SETTINGS.into());
+    }
     if path.is_empty() || path.contains('\0') || path.encode_utf16().count() > 32767 {
         return Err("Empty, NUL-containing or overlong path".into());
     }
-    // Some legacy shell templates quote C:\ as "C:\", leaving C:" in argv.
-    // A quote cannot occur in an ordinary Windows filename. Repair that root only.
     let mut repaired = path.to_string();
     if repaired.ends_with('"') && !repaired[..repaired.len() - 1].contains('"') {
         repaired.pop();
@@ -150,7 +148,11 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
             i += 1;
             continue;
         }
-        if !literal && lower == "--shell-open" {result.shell_open=true;i+=1;continue;}
+        if !literal && lower == "--shell-open" {
+            result.shell_open = true;
+            i += 1;
+            continue;
+        }
         let mode = if !literal {
             match lower.as_str() {
                 "--new-window" | "/n" => Some(Mode::NewWindow),
@@ -279,7 +281,7 @@ impl Drop for Lock {
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum Action {
+pub(crate) enum Action {
     Probe,
     Match,
     Navigate,
@@ -287,11 +289,11 @@ enum Action {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Request {
-    version: u32,
-    action: Action,
-    path: String,
-    select: Option<String>,
+pub(crate) struct Request {
+    pub version: u32,
+    pub action: Action,
+    pub path: String,
+    pub select: Option<String>,
 }
 fn decode(bytes: &[u8]) -> Option<Request> {
     if bytes.is_empty() || bytes.len() > 131072 {
@@ -321,8 +323,6 @@ impl Drop for Requester {
         }
     }
 }
-// Integration point: a future resident/pipe transport can replace this bounded CLI handoff.
-// Shell window publication/selection (IShellWindows) is deliberately separate and pending.
 fn dispatch(launch: &Launch) -> bool {
     unsafe {
         if !matches!(launch.mode, Mode::Reuse | Mode::NewTab) {
@@ -374,8 +374,6 @@ fn dispatch(launch: &Launch) -> bool {
             };
             let mut pid = 0;
             GetWindowThreadProcessId(target, Some(&mut pid));
-            // ASFW replaces the one permitted process. Do not give away the
-            // launcher's permission while merely probing a nonmatching window.
             if !probe {
                 let permitted = AllowSetForegroundWindow(pid).is_ok();
                 #[cfg(debug_assertions)]
@@ -417,32 +415,48 @@ fn dispatch(launch: &Launch) -> bool {
     }
 }
 fn shell_supported(path: &str) -> bool {
-    if crate::shell::browser::handles(path) { return false; }
-    if !ids::is_virtual(path) { return true; }
-    [ids::THIS_PC, ids::HOME, ids::QUICK_ACCESS, ids::GALLERY, ids::RECYCLE_BIN,
-     ids::NETWORK, ids::LIBRARIES].iter().any(|id| ids::same(path, id))
+    if crate::shell::browser::handles(path) {
+        return false;
+    }
+    if !ids::is_virtual(path) {
+        return true;
+    }
+    [
+        ids::THIS_PC,
+        ids::HOME,
+        ids::QUICK_ACCESS,
+        ids::GALLERY,
+        ids::RECYCLE_BIN,
+        ids::NETWORK,
+        ids::LIBRARIES,
+    ]
+    .iter()
+    .any(|id| ids::same(path, id))
         || crate::shell::library::is_library(path)
 }
-/// Invoke the untouched native Folder/opennewwindow verb explicitly. Neither that
-/// verb nor its ExecuteFolder CLSID is registered by this feature, so this cannot
-/// route through our open/explore or the separate Win+E association.
 fn open_original(path: &str) -> Result<(), String> {
+    use windows::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_CLASSNAME, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    };
     use winreg::{enums::HKEY_CLASSES_ROOT, RegKey};
-    use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_CLASSNAME, SEE_MASK_NOASYNC};
     let native: String = RegKey::predef(HKEY_CLASSES_ROOT)
         .open_subkey(r"Folder\shell\opennewwindow\command")
-        .and_then(|k| k.get_value("DelegateExecute")).map_err(|e|e.to_string())?;
+        .and_then(|k| k.get_value("DelegateExecute"))
+        .map_err(|e| e.to_string())?;
     if !native.eq_ignore_ascii_case("{11dbb47c-a525-400b-9e80-a54615a090c0}") {
         return Err("Native Explorer fallback association changed".into());
     }
-    let target=crate::shell::wide(path);
-    let mut info=SHELLEXECUTEINFOW {
-        cbSize:std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask:SEE_MASK_CLASSNAME|SEE_MASK_NOASYNC,
-        lpClass:w!("Folder"),lpVerb:w!("opennewwindow"),lpFile:PCWSTR(target.as_ptr()),
-        nShow:SW_SHOWNORMAL.0,..Default::default()
+    let target = crate::shell::wide(path);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_CLASSNAME | SEE_MASK_NOASYNC,
+        lpClass: w!("Folder"),
+        lpVerb: w!("opennewwindow"),
+        lpFile: PCWSTR(target.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
     };
-    unsafe {ShellExecuteExW(&mut info).map_err(|e|e.message())}
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 pub fn start() -> Result<bool, String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -452,8 +466,11 @@ pub fn start() -> Result<bool, String> {
     }
     let launch = parse(&args)?;
     if launch.shell_open {
-        if let Some(path)=launch.path.as_deref() {
-            if !shell_supported(path) { open_original(path)?; return Ok(true); }
+        if let Some(path) = launch.path.as_deref() {
+            if !shell_supported(path) {
+                open_original(path)?;
+                return Ok(true);
+            }
         }
     }
     OPTIONS.with(|o| *o.borrow_mut() = launch.clone());
@@ -464,173 +481,6 @@ pub fn start() -> Result<bool, String> {
     }
     Ok(false)
 }
-pub fn ready(app: &Rc<App>) {
-    if let Some(select) = options().select {
-        app.state.borrow_mut().after_load = Some(AfterLoad {
-            select,
-            rename: false,
-        });
-    }
-    unsafe {
-        let _ = SetPropW(
-            app.hwnd.get(),
-            w!("SlintExplorerLaunchReady"),
-            Some(HANDLE(1 as _)),
-        );
-    }
-    app.sync_tabs();
-    if options().path.is_some() || options().mode == Mode::NewWindow {
-        activate(app.hwnd.get(), 2);
-    }
-    STARTUP.with(|g| g.borrow_mut().take());
-}
-fn activate(hwnd: HWND, retries: u8) {
-    unsafe {
-        if GetPropW(hwnd, w!("SlintExplorerMain")).0 as usize != 0x535745
-            || !super::tab_transfer::same_executable(hwnd)
-        {
-            return;
-        }
-        if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-            // The alpha software surface may have been discarded while minimized.
-            // A normal request_redraw only repaints dirty items, leaving holes.
-            let handle = hwnd.0 as usize;
-            slint::Timer::single_shot(std::time::Duration::from_millis(20), move || {
-                with_app(|app| {
-                    if app.hwnd.get().0 as usize != handle {
-                        return;
-                    }
-                    use slint::private_unstable_api::re_exports::{LogicalRect, WindowInner};
-                    use slint::ComponentHandle;
-                    let ui = app.ui();
-                    let window = ui.window();
-                    let size = window.size().to_logical(window.scale_factor());
-                    WindowInner::from_pub(window)
-                        .window_adapter()
-                        .renderer()
-                        .mark_dirty_region(
-                            LogicalRect::from_size((size.width, size.height).into()).into(),
-                        );
-                    window.request_redraw();
-                })
-            });
-        }
-        let activated = SetForegroundWindow(hwnd).as_bool();
-        #[cfg(debug_assertions)]
-        let _ = SetPropW(
-            hwnd,
-            w!("SlintLaunchActivated"),
-            Some(HANDLE((activated as usize + 1) as _)),
-        );
-        if !activated && retries > 0 {
-            // A foreground ShellExecute caller can still hold its launch/menu
-            // lock during the handoff. Retry after it returns; Windows retains
-            // control over grants and revokes them on intervening user input.
-            let handle = hwnd.0 as usize;
-            slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
-                activate(HWND(handle as _), retries - 1)
-            });
-        }
-    }
-}
-fn select(app: &Rc<App>, path: String) {
-    let (loaded, row) = {
-        let st = app.state.borrow();
-        (
-            st.loaded,
-            st.order
-                .iter()
-                .position(|&i| same(&st.entries[i].path, &path)),
-        )
-    };
-    if let Some(row) = row {
-        let path = {
-            let st = app.state.borrow();
-            st.entries[st.order[row]].path.clone()
-        };
-        app.set_selection(
-            HashSet::from([path.clone()]),
-            Some(path.clone()),
-            Some(path.clone()),
-        );
-        app.reveal(&path);
-    } else {
-        app.state.borrow_mut().after_load = Some(AfterLoad {
-            select: path,
-            rename: false,
-        });
-        if loaded {
-            app.reload();
-        }
-    }
-}
-pub fn message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    if msg != WM_COPYDATA || lparam.0 == 0 {
-        return None;
-    }
-    let source = HWND(wparam.0 as _);
-    unsafe {
-        if GetPropW(source, w!("SlintExplorerLaunch")).0 as usize != LAUNCH_MARK
-            || !super::tab_transfer::same_executable(source)
-        {
-            return None;
-        }
-        let packet = &*(lparam.0 as *const COPYDATASTRUCT);
-        if packet.dwData != DATA {
-            return None;
-        }
-        if packet.lpData.is_null() || packet.cbData == 0 || packet.cbData > 131072 {
-            return Some(LRESULT(0));
-        }
-        let Some(request) = decode(std::slice::from_raw_parts(
-            packet.lpData as *const u8,
-            packet.cbData as usize,
-        )) else {
-            return Some(LRESULT(0));
-        };
-        let mut matched = None;
-        with_app(|app| {
-            matched = app
-                .state
-                .borrow()
-                .tabs
-                .iter()
-                .position(|t| same(t.path(), &request.path));
-        });
-        if matches!(request.action, Action::Probe) {
-            return Some(LRESULT(matched.is_some() as _));
-        }
-        if matches!(request.action, Action::Match) && matched.is_none() {
-            return Some(LRESULT(0));
-        }
-        let queued = slint::invoke_from_event_loop(move || {
-            with_app(|app| {
-                match request.action {
-                    Action::Probe => unreachable!("Probe is synchronous and does not activate"),
-                    Action::Match => {
-                        if let Some(index) = matched {
-                            app.select_tab(index);
-                        }
-                    }
-                    Action::Navigate => app.navigate(&request.path),
-                    Action::NewTab => app.new_tab(&request.path),
-                }
-                if let Some(path) = request.select {
-                    select(app, path);
-                }
-            })
-        })
-        .is_ok();
-        // Activate during the synchronous handoff, while the launching process
-        // and its foreground grant still exist. UI mutations stay queued.
-        if queued {
-            activate(hwnd, 2);
-        }
-        Some(LRESULT(queued as _))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,4 +532,41 @@ mod tests {
         future.path.push('\0');
         assert!(decode(&serde_json::to_vec(&future).unwrap()).is_none());
     }
+}
+
+pub(crate) fn incoming(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<Result<Request, ()>> {
+    if msg != WM_COPYDATA || lparam.0 == 0 {
+        return None;
+    }
+    let source = HWND(wparam.0 as _);
+    unsafe {
+        if GetPropW(source, w!("SlintExplorerLaunch")).0 as usize != LAUNCH_MARK
+            || !super::tab_transfer::same_executable(source)
+        {
+            return None;
+        }
+        let packet = &*(lparam.0 as *const COPYDATASTRUCT);
+        if packet.dwData != DATA {
+            return None;
+        }
+        if packet.lpData.is_null() || packet.cbData == 0 || packet.cbData > 131072 {
+            return Some(Err(()));
+        }
+        let Some(request) = decode(std::slice::from_raw_parts(
+            packet.lpData as *const u8,
+            packet.cbData as usize,
+        )) else {
+            return Some(Err(()));
+        };
+        Some(Ok(request))
+    }
+}
+
+pub fn ready_window(hwnd: HWND) {
+    if let Err(error) =
+        unsafe { SetPropW(hwnd, w!("SlintExplorerLaunchReady"), Some(HANDLE(1 as _))) }
+    {
+        eprintln!("launch readiness: {error}");
+    }
+    STARTUP.with(|guard| guard.borrow_mut().take());
 }

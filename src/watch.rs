@@ -1,92 +1,119 @@
-//! Watches the active folder and tells the UI thread when it changes.
-
-use std::sync::Mutex;
-
 use notify::{EventKind, RecursiveMode, Watcher};
 
-static WATCHER: Mutex<Option<notify::RecommendedWatcher>> = Mutex::new(None);
-
-pub fn watch(path: Option<String>) {
-    let paths = path.iter().cloned().collect();
-    watch_many(path.unwrap_or_default(), paths);
-}
-
-pub fn watch_many(folder: String, paths: Vec<String>) {
-    let mut guard = WATCHER.lock().unwrap();
-    *guard = None;
-    if paths.is_empty() { return; }
-    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            if !matches!(event.kind, EventKind::Access(_)) {
-                let folder = folder.clone();
-                crate::app::post(move |app| app.fs_changed(folder));
+pub fn listen(
+    paths: &[String],
+    mut changed: impl FnMut(notify::Result<notify::Event>) + Send + 'static,
+) -> notify::Result<notify::RecommendedWatcher> {
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if !event
+            .as_ref()
+            .is_ok_and(|event| matches!(event.kind, EventKind::Access(_)))
+        {
+            changed(event);
+        }
+    })?;
+    let mut watched = false;
+    let mut failure = None;
+    for path in paths {
+        if !std::path::Path::new(path).is_dir() {
+            continue;
+        }
+        match watcher.watch(std::path::Path::new(path), RecursiveMode::NonRecursive) {
+            Ok(()) => watched = true,
+            Err(error) => {
+                eprintln!("watch {path}: {error}");
+                failure = Some(error);
             }
         }
-    });
-    if let Ok(mut watcher) = watcher {
-        let mut watched = false;
-        for path in paths {
-            if std::path::Path::new(&path).is_dir() {
-                watched |= watcher.watch(std::path::Path::new(&path), RecursiveMode::NonRecursive).is_ok();
+    }
+    if !watched {
+        return Err(
+            failure.unwrap_or_else(|| notify::Error::generic("no existing directories to watch"))
+        );
+    }
+    Ok(watcher)
+}
+
+#[derive(Default)]
+pub struct Renames {
+    pending: Option<notify::Event>,
+}
+
+impl Renames {
+    pub fn waiting(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub fn flush(&mut self) -> Option<notify::Event> {
+        self.pending
+            .take()
+            .map(|event| event.set_kind(EventKind::Remove(notify::event::RemoveKind::Any)))
+    }
+
+    pub fn push(&mut self, mut event: notify::Event) -> Vec<notify::Event> {
+        use notify::event::{ModifyKind, RenameMode};
+        let mut ready = Vec::new();
+        if matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::To))
+        ) {
+            if let Some(from) = self.pending.take() {
+                let mut paths = from.paths;
+                paths.extend(event.paths);
+                event.paths = paths;
+                ready.push(event.set_kind(EventKind::Modify(ModifyKind::Name(RenameMode::Both))));
+                return ready;
             }
         }
-        if watched { *guard = Some(watcher); }
-    }
-}
-
-/// The window message the shell's change notifications come as (see `watch_shell`).
-pub const SHELL_CHANGE_MSG: u32 = 0x8000 + 0x51;
-
-thread_local! {
-    static SHELL_WATCH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    // The folder registered, kept while it is.
-    static SHELL_WATCHED: std::cell::RefCell<Option<crate::shell::Pidl>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Folders outside the file system (the Recycle Bin, This PC, Network) change without files
-/// to watch: the shell's notifications for them come to the window as SHELL_CHANGE_MSG.
-pub fn watch_shell(hwnd: windows::Win32::Foundation::HWND, path: Option<&str>) {
-    use windows::Win32::UI::Shell::{
-        SHChangeNotifyDeregister, SHChangeNotifyEntry, SHChangeNotifyRegister, SHCNE_ALLEVENTS, SHCNRF_InterruptLevel, SHCNRF_NewDelivery,
-        SHCNRF_ShellLevel,
-    };
-    let old = SHELL_WATCH.with(|w| w.replace(0));
-    if old != 0 {
-        unsafe {
-            let _ = SHChangeNotifyDeregister(old);
+        if let Some(from) = self.flush() {
+            ready.push(from);
         }
+        if matches!(
+            event.kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::From))
+        ) {
+            self.pending = Some(event);
+        } else {
+            ready.push(event);
+        }
+        ready
     }
-    let Some(path) = path else { return };
-    let Ok(pidl) = crate::shell::Pidl::parse(path) else { return };
-    let entry = SHChangeNotifyEntry { pidl: pidl.ptr() as *mut _, fRecursive: false.into() };
-    let id = unsafe {
-        SHChangeNotifyRegister(
-            hwnd,
-            SHCNRF_ShellLevel | SHCNRF_InterruptLevel | SHCNRF_NewDelivery,
-            SHCNE_ALLEVENTS.0 as i32,
-            SHELL_CHANGE_MSG,
-            1,
-            &entry,
-        )
-    };
-    SHELL_WATCH.with(|w| w.set(id));
-    SHELL_WATCHED.with(|w| *w.borrow_mut() = Some(pidl));
 }
 
-/// Takes in one of the shell's notifications (SHCNRF_NewDelivery hands it locked).
-pub fn shell_notified(wparam: usize, lparam: isize) {
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::UI::Shell::{SHChangeNotification_Lock, SHChangeNotification_Unlock};
-    unsafe {
-        let mut pidls = std::ptr::null_mut();
-        let mut event = 0i32;
-        let lock = SHChangeNotification_Lock(HANDLE(wparam as _), lparam as u32, Some(&mut pidls), Some(&mut event));
-        if !lock.is_invalid() {
-            let _ = SHChangeNotification_Unlock(HANDLE(lock.0));
-        }
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+    use notify::event::{ModifyKind, RenameMode};
+
+    #[test]
+    fn separate_windows_rename_records_form_one_identity_change_and_orphans_expire() {
+        let event = |mode, path: &str| {
+            notify::Event::new(EventKind::Modify(ModifyKind::Name(mode))).add_path(path.into())
+        };
+        let mut renames = Renames::default();
+        assert!(renames.push(event(RenameMode::From, "old.txt")).is_empty());
+        assert!(renames.waiting());
+        let paired = renames.push(event(RenameMode::To, "new.txt"));
+        assert_eq!(paired.len(), 1);
+        assert!(matches!(
+            paired[0].kind,
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+        ));
+        assert_eq!(
+            paired[0].paths,
+            vec![
+                std::path::PathBuf::from("old.txt"),
+                std::path::PathBuf::from("new.txt")
+            ]
+        );
+        assert!(!renames.waiting());
+        renames.push(event(RenameMode::From, "moved-out.txt"));
+        let expired = renames.flush().unwrap();
+        assert!(matches!(expired.kind, EventKind::Remove(_)));
+        assert_eq!(
+            expired.paths,
+            vec![std::path::PathBuf::from("moved-out.txt")]
+        );
+        assert!(!renames.waiting());
     }
-    crate::app::post(|app| {
-        let path = app.state.borrow().path.clone();
-        app.fs_changed(path);
-    });
 }

@@ -1,8 +1,3 @@
-//! App commands in the context menu ("Editar no Bloco de Notas", "Abrir no Terminal"...):
-//! packages declare `windows.fileExplorerContextMenus` verbs in their manifests, each an
-//! `IExplorerCommand` CLSID bound to item types (`*`, `.png`, `Directory`,
-//! `Directory\Background`).
-
 use std::sync::OnceLock;
 
 use windows::core::GUID;
@@ -248,13 +243,6 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     Some(tag[at..].split('"').next()?.to_string())
 }
 
-/// Starts reading the manifests off the UI thread, so the first menu doesn't wait.
-pub fn preload() {
-    std::thread::spawn(|| {
-        verbs();
-    });
-}
-
 /// Whether a verb registered for `types` applies to every item. `background` asks for the
 /// folder's own background menu.
 fn applies(types: &[String], paths: &[String], background: bool) -> bool {
@@ -352,37 +340,80 @@ fn store_verb(name: &str) -> Option<Verb> {
 }
 
 /// Query a CommandStore command with the hosting browser as its native site.
-pub fn store_query(name:&str,site:Option<windows::core::IUnknown>)->Result<Vec<String>,String>{
-    use windows::{core::Interface,Win32::System::Ole::IObjectWithSite};
-    com_init();unsafe{
-        let command=store_verb(name).and_then(|v|create(&v)).ok_or("Command unavailable")?;
-        if let (Ok(object),Some(site))=(command.cast::<IObjectWithSite>(),site){object.SetSite(&site).map_err(|e|e.message())?;}
-        let mut result=vec![format!("title {:?}",command.GetTitle(None).map(|p|take_pwstr(p)))];
-        if let Ok(subs)=command.EnumSubCommands(){
-            let mut commands=[None];let mut fetched=0;
-            while subs.Next(&mut commands,Some(&mut fetched)).is_ok()&&fetched>0{
-                if let Some(sub)=commands[0].take(){result.push(format!("{} tooltip {:?} icon {:?}",sub.GetTitle(None).map(|p|take_pwstr(p)).unwrap_or_default(),sub.GetToolTip(None).map(|p|take_pwstr(p)),sub.GetIcon(None).map(|p|take_pwstr(p))));}
+pub fn store_query(
+    name: &str,
+    site: Option<windows::core::IUnknown>,
+) -> Result<Vec<String>, String> {
+    use windows::{core::Interface, Win32::System::Ole::IObjectWithSite};
+    com_init();
+    unsafe {
+        let command = store_verb(name)
+            .and_then(|v| create(&v))
+            .ok_or("Command unavailable")?;
+        if let (Ok(object), Some(site)) = (command.cast::<IObjectWithSite>(), site) {
+            object.SetSite(&site).map_err(|e| e.message())?;
+        }
+        let mut result = vec![format!(
+            "title {:?}",
+            command.GetTitle(None).map(|p| take_pwstr(p))
+        )];
+        if let Ok(subs) = command.EnumSubCommands() {
+            let mut commands = [None];
+            let mut fetched = 0;
+            while subs.Next(&mut commands, Some(&mut fetched)).is_ok() && fetched > 0 {
+                if let Some(sub) = commands[0].take() {
+                    result.push(format!(
+                        "{} tooltip {:?} icon {:?}",
+                        sub.GetTitle(None)
+                            .map(|p| take_pwstr(p))
+                            .unwrap_or_default(),
+                        sub.GetToolTip(None).map(|p| take_pwstr(p)),
+                        sub.GetIcon(None).map(|p| take_pwstr(p))
+                    ));
+                }
             }
         }
         Ok(result)
     }
 }
 
-pub fn store_subcommands(name:&str)->Vec<(String,Option<Rgba>)>{
-    com_init();unsafe{
-        let Some(command)=store_verb(name).and_then(|v|create(&v))else{return Vec::new()};
-        let Ok(subs)=command.EnumSubCommands()else{return Vec::new()};
-        let mut result=Vec::new();let mut commands=[None];let mut fetched=0;
-        while subs.Next(&mut commands,Some(&mut fetched)).is_ok()&&fetched>0{
-            if let Some(command)=commands[0].take(){result.push((command.GetTitle(None).map(|p|take_pwstr(p)).unwrap_or_default(),command.GetIcon(None).ok().map(|p|take_pwstr(p)).and_then(|p|small_icon_at(&p))));}
+pub fn store_subcommands(name: &str) -> Vec<(String, Option<Rgba>)> {
+    com_init();
+    unsafe {
+        let Some(command) = store_verb(name).and_then(|v| create(&v)) else {
+            return Vec::new();
+        };
+        let Ok(subs) = command.EnumSubCommands() else {
+            return Vec::new();
+        };
+        let mut result = Vec::new();
+        let mut commands = [None];
+        let mut fetched = 0;
+        while subs.Next(&mut commands, Some(&mut fetched)).is_ok() && fetched > 0 {
+            if let Some(command) = commands[0].take() {
+                result.push((
+                    command
+                        .GetTitle(None)
+                        .map(|p| take_pwstr(p))
+                        .unwrap_or_default(),
+                    command
+                        .GetIcon(None)
+                        .ok()
+                        .map(|p| take_pwstr(p))
+                        .and_then(|p| small_icon_at(&p)),
+                ));
+            }
         }
         result
     }
 }
-pub fn invoke_store_dialog(name:&str)->Result<(),String>{
-    com_init();unsafe{
-        let command=store_verb(name).and_then(|v|create(&v)).ok_or("Command unavailable")?;
-        command.Invoke(None,None).map_err(|e|e.message())
+pub fn invoke_store_dialog(name: &str) -> Result<(), String> {
+    com_init();
+    unsafe {
+        let command = store_verb(name)
+            .and_then(|v| create(&v))
+            .ok_or("Command unavailable")?;
+        command.Invoke(None, None).map_err(|e| e.message())
     }
 }
 
@@ -507,7 +538,6 @@ unsafe fn describe(
     })
 }
 
-/// The app commands for the items (or the folder's background), as their handlers word them.
 pub fn commands(paths: &[String], background: bool) -> Vec<Command> {
     com_init();
     let Ok(items) = ops::item_array(paths) else {
@@ -536,11 +566,16 @@ pub fn commands(paths: &[String], background: bool) -> Vec<Command> {
                     clsid: GUID::zeroed(),
                     title: group.clone(),
                     access_key: String::new(),
-                    icon: super::icons::thumbnail(
+                    icon: super::icons::small_namespace_icon(
                         r"shell:AppsFolder\Microsoft.OneDriveSync_8wekyb3d8bbwe!OneDrive",
-                        16,
                     )
-                    .ok(),
+                    .or_else(|| {
+                        super::icons::thumbnail(
+                            r"shell:AppsFolder\Microsoft.OneDriveSync_8wekyb3d8bbwe!OneDrive",
+                            16,
+                        )
+                        .ok()
+                    }),
                     enabled: true,
                     subs: vec![command],
                     subcommand: None,
@@ -553,7 +588,6 @@ pub fn commands(paths: &[String], background: bool) -> Vec<Command> {
     out
 }
 
-/// Read-only diagnostics for extension loading; never activates a command.
 pub fn diagnostics(paths: &[String]) -> Vec<String> {
     com_init();
     let Ok(items) = ops::item_array(paths) else {
@@ -565,12 +599,13 @@ pub fn diagnostics(paths: &[String]) -> Vec<String> {
         .map(|v| match create(v) {
             Some(c) => unsafe {
                 format!(
-                    "{:?} dll={:?} title={:?} state={:?} flags={:?}",
+                    "{:?} dll={:?} title={:?} state={:?} flags={:?} icon={:?}",
                     v.clsid,
                     v.dll,
                     c.GetTitle(&items).map(|p| take_pwstr(p)),
                     c.GetState(&items, true),
-                    c.GetFlags()
+                    c.GetFlags(),
+                    c.GetIcon(&items).map(|path| take_pwstr(path))
                 )
             },
             None => format!("{:?} dll={:?} create failed", v.clsid, v.dll),
@@ -578,7 +613,6 @@ pub fn diagnostics(paths: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The fallback entry for a verb we couldn't create. Notepad opens files, not folders.
 fn stand_in(verb: &Verb, paths: &[String]) -> Option<Command> {
     let (_, title, app, program) = FALLBACKS[verb.fallback?];
     if program == "notepad.exe" && paths.iter().any(|p| ops::is_folder(p)) {
@@ -587,7 +621,9 @@ fn stand_in(verb: &Verb, paths: &[String]) -> Option<Command> {
     let icon = if app.is_empty() {
         small_icon_at(&verb.program.to_string_lossy())
     } else {
-        super::icons::thumbnail(&format!(r"shell:AppsFolder\{app}"), 16).ok()
+        let item = format!(r"shell:AppsFolder\{app}");
+        super::icons::small_namespace_icon(&item)
+            .or_else(|| super::icons::thumbnail(&item, 16).ok())
     };
     Some(Command {
         clsid: verb.clsid,

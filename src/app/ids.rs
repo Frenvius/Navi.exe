@@ -1,7 +1,7 @@
-//! Shell namespace locations the UI treats specially.
-
-pub const SETTINGS: &str = "slint:settings";
-pub fn is_settings(path: &str) -> bool { path.eq_ignore_ascii_case(SETTINGS) }
+pub const SETTINGS: &str = concat!(env!("CARGO_PKG_NAME"), ":settings");
+pub fn is_settings(path: &str) -> bool {
+    path.eq_ignore_ascii_case(SETTINGS) || path.eq_ignore_ascii_case("Slint:settings")
+}
 
 pub const THIS_PC: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
 pub const HOME: &str = "::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}";
@@ -16,32 +16,42 @@ pub fn same(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-/// The app's id for a location it draws its own way, when given by another name
-/// ("shell:MyComputerFolder" is This PC); others as they are.
 pub fn canonical(id: &str) -> String {
+    if is_settings(id) {
+        return SETTINGS.into();
+    }
     match id.to_ascii_lowercase().as_str() {
-        "slint:settings" => SETTINGS.into(),
-        "shell:mycomputerfolder" | "shell:::{20d04fe0-3aea-1069-a2d8-08002b30309d}" => THIS_PC.to_string(),
+        "shell:mycomputerfolder" | "shell:::{20d04fe0-3aea-1069-a2d8-08002b30309d}" => {
+            THIS_PC.to_string()
+        }
         "shell:::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}" => HOME.to_string(),
         "shell:gallery" | "shell:::{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}" => GALLERY.to_string(),
-        "shell:recyclebinfolder" | "shell:::{645ff040-5081-101b-9f08-00aa002f954e}" => RECYCLE_BIN.to_string(),
-        "shell:libraries" | "shell:::{031e4825-7b94-4dc3-b131-e946b44c8dd5}" => LIBRARIES.to_string(),
-        "shell:networkplacesfolder" | "shell:::{f02c1a0d-be21-4350-88b0-7367fc96ef3c}" => NETWORK.to_string(),
-        _ if crate::shell::browser::handles(id) => crate::shell::Pidl::parse(id).map(|p|p.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING)).ok().filter(|name|!name.is_empty()).unwrap_or_else(||id.to_string()),
+        "shell:recyclebinfolder" | "shell:::{645ff040-5081-101b-9f08-00aa002f954e}" => {
+            RECYCLE_BIN.to_string()
+        }
+        "shell:libraries" | "shell:::{031e4825-7b94-4dc3-b131-e946b44c8dd5}" => {
+            LIBRARIES.to_string()
+        }
+        "shell:networkplacesfolder" | "shell:::{f02c1a0d-be21-4350-88b0-7367fc96ef3c}" => {
+            NETWORK.to_string()
+        }
+        _ if crate::shell::browser::handles(id) => crate::shell::Pidl::parse(id)
+            .map(|p| p.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING))
+            .ok()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| id.to_string()),
         _ => id.to_string(),
     }
 }
 
 /// Virtual folders have no file system path (This PC, Home, Network, search results...).
 pub fn is_virtual(id: &str) -> bool {
-    is_settings(id) || id.starts_with("::") || id.starts_with("shell:") || is_search(id) || crate::shell::archive::root(id).is_some() || crate::shell::network::is_computer(id)
-}
-
-/// Locations the app draws its own way (Home, the Gallery), whose saved views it doesn't
-/// follow; searches go by the folder searched. This PC follows its own (its tiles are drawn
-/// the app's way only in the Blocos mode).
-pub fn has_own_view(id: &str) -> bool {
-    [HOME, GALLERY, QUICK_ACCESS].iter().any(|own| id.eq_ignore_ascii_case(own)) || is_search(id)
+    is_settings(id)
+        || id.starts_with("::")
+        || id.starts_with("shell:")
+        || is_search(id)
+        || crate::shell::archive::root(id).is_some()
+        || crate::shell::network::is_computer(id)
 }
 
 /// Where a new window or tab opens: Folder Options' "Abrir o Explorador de Arquivos em"
@@ -77,7 +87,10 @@ pub fn search_parts(id: &str) -> Option<(&str, &str)> {
 
 pub fn is_drive_root(id: &str) -> bool {
     let b = id.as_bytes();
-    (b.len() == 2 || b.len() == 3) && b[0].is_ascii_alphabetic() && b[1] == b':' && (b.len() == 2 || b[2] == b'\\' || b[2] == b'/')
+    (b.len() == 2 || b.len() == 3)
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || b[2] == b'\\' || b[2] == b'/')
 }
 
 /// Library namespace items parse to the library definition, not its save directory.
@@ -121,5 +134,18 @@ pub fn parent_of(path: &str) -> String {
                 parent.to_string()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_history_accepts_the_previous_namespace_and_canonicalizes_it() {
+        assert!(is_settings("Slint:Settings"));
+        assert_eq!(canonical("Slint:Settings"), SETTINGS);
+        assert_eq!(canonical(SETTINGS), SETTINGS);
+        assert!(!is_settings("other:settings"));
     }
 }

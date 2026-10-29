@@ -14,15 +14,19 @@ use windows::Win32::Globalization::{CompareStringEx, COMPARESTRING_RESULT, LINGU
 use windows::Win32::Storage::EnhancedStorage::PKEY_ItemNameDisplay;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    LVCOLUMNW, LVCF_WIDTH, LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVIS_STATEIMAGEMASK, LVITEMW, LVM_ENSUREVISIBLE,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETCOLUMNWIDTH, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
+    LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_FOCUSED, LVIS_SELECTED, LVIS_STATEIMAGEMASK,
+    LVITEMW, LVM_ENSUREVISIBLE, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETCOLUMNWIDTH,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
     LVN_ITEMCHANGING, LVSCW_AUTOSIZE, LVS_EX_CHECKBOXES, NMHDR, NMLISTVIEW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
-use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyDescription, IPropertyDescriptionList, PSEnumeratePropertyDescriptions, PDEF_VIEWABLE};
+use windows::Win32::UI::Shell::PropertiesSystem::{
+    IPropertyDescription, IPropertyDescriptionList, PSEnumeratePropertyDescriptions, PDEF_VIEWABLE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DialogBoxParamW, EndDialog, GetDlgItem, GetDlgItemInt, GetWindowLongPtrW, SendMessageW, SetDlgItemInt, SetWindowLongPtrW, EN_CHANGE, GWLP_USERDATA, IDCANCEL,
-    IDOK, WINDOW_LONG_PTR_INDEX, WM_COMMAND, WM_INITDIALOG, WM_NOTIFY,
+    DialogBoxParamW, EndDialog, GetDlgItem, GetDlgItemInt, GetWindowLongPtrW, SendMessageW,
+    SetDlgItemInt, SetWindowLongPtrW, EN_CHANGE, GWLP_USERDATA, IDCANCEL, IDOK,
+    WINDOW_LONG_PTR_INDEX, WM_COMMAND, WM_INITDIALOG, WM_NOTIFY,
 };
 
 use crate::shell::wide;
@@ -54,24 +58,56 @@ struct Dialog {
 
 /// Runs the dialog over the shown columns; on OK, the columns to show, in order, with the
 /// widths known (None for those just added).
-pub fn choose(owner: HWND, shown: &[(PROPERTYKEY, f32)]) -> Option<Vec<(PROPERTYKEY, Option<u32>)>> {
+pub fn choose(
+    owner: HWND,
+    shown: &[(PROPERTYKEY, f32)],
+) -> Option<Vec<(PROPERTYKEY, Option<u32>)>> {
     let mut items: Vec<Item> = shown
         .iter()
-        .filter_map(|(key, w)| super::columns::label(key).map(|label| Item { key: *key, label, checked: true, width: Some(w.round() as u32) }))
+        .filter_map(|(key, w)| {
+            super::columns::label(key).map(|label| Item {
+                key: *key,
+                label,
+                checked: true,
+                width: Some(w.round() as u32),
+            })
+        })
         .collect();
     let mut rest: Vec<Item> = viewable()
         .into_iter()
         .filter(|(key, _)| !shown.iter().any(|(k, _)| k == key))
-        .map(|(key, label)| Item { key, label, checked: false, width: None })
+        .map(|(key, label)| Item {
+            key,
+            label,
+            checked: false,
+            width: None,
+        })
         .collect();
     rest.sort_by(|a, b| compare(&a.label, &b.label));
     items.extend(rest);
-    let mut dialog = Dialog { items, selected: 0, quiet: false };
+    let mut dialog = Dialog {
+        items,
+        selected: 0,
+        quiet: false,
+    };
     let ok = unsafe {
         let shell32 = GetModuleHandleW(windows::core::w!("shell32.dll")).ok()?;
-        DialogBoxParamW(Some(HINSTANCE(shell32.0)), PCWSTR(DIALOG as usize as *const u16), Some(owner), Some(proc), LPARAM(&mut dialog as *mut Dialog as isize))
+        DialogBoxParamW(
+            Some(HINSTANCE(shell32.0)),
+            PCWSTR(DIALOG as usize as *const u16),
+            Some(owner),
+            Some(proc),
+            LPARAM(&mut dialog as *mut Dialog as isize),
+        )
     };
-    (ok == IDOK.0 as isize).then(|| dialog.items.iter().filter(|i| i.checked).map(|i| (i.key, i.width)).collect())
+    (ok == IDOK.0 as isize).then(|| {
+        dialog
+            .items
+            .iter()
+            .filter(|i| i.checked)
+            .map(|i| (i.key, i.width))
+            .collect()
+    })
 }
 
 /// The property system's viewable properties that have a name.
@@ -79,13 +115,24 @@ fn viewable() -> Vec<(PROPERTYKEY, String)> {
     let mut out = Vec::new();
     unsafe {
         let mut list: Option<IPropertyDescriptionList> = None;
-        if PSEnumeratePropertyDescriptions(PDEF_VIEWABLE, &IPropertyDescriptionList::IID, &mut list as *mut _ as *mut _).is_err() {
+        if PSEnumeratePropertyDescriptions(
+            PDEF_VIEWABLE,
+            &IPropertyDescriptionList::IID,
+            &mut list as *mut _ as *mut _,
+        )
+        .is_err()
+        {
             return out;
         }
         let Some(list) = list else { return out };
         for i in 0..list.GetCount().unwrap_or(0) {
-            let Ok(desc) = list.GetAt::<IPropertyDescription>(i) else { continue };
-            let label = desc.GetDisplayName().map(|p| crate::shell::take_pwstr(p)).unwrap_or_default();
+            let Ok(desc) = list.GetAt::<IPropertyDescription>(i) else {
+                continue;
+            };
+            let label = desc
+                .GetDisplayName()
+                .map(|p| crate::shell::take_pwstr(p))
+                .unwrap_or_default();
             let mut key = PROPERTYKEY::default();
             if !label.is_empty() && desc.GetPropertyKey(&mut key).is_ok() {
                 out.push((key, label));
@@ -98,7 +145,17 @@ fn viewable() -> Vec<(PROPERTYKEY, String)> {
 /// Names in the user's language order, ignoring case and accents' weight.
 fn compare(a: &str, b: &str) -> Ordering {
     let (a, b): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
-    match unsafe { CompareStringEx(PCWSTR::null(), LINGUISTIC_IGNORECASE, &a, &b, None, None, None) } {
+    match unsafe {
+        CompareStringEx(
+            PCWSTR::null(),
+            LINGUISTIC_IGNORECASE,
+            &a,
+            &b,
+            None,
+            None,
+            None,
+        )
+    } {
         COMPARESTRING_RESULT(1) => Ordering::Less,
         COMPARESTRING_RESULT(3) => Ordering::Greater,
         _ => Ordering::Equal,
@@ -115,19 +172,35 @@ fn send(hwnd: HWND, msg: u32, w: usize, l: isize) -> isize {
 
 /// A row's check box: state image 2 is checked, 1 unchecked.
 fn set_check(list: HWND, row: usize, checked: bool) {
-    let lv = LVITEMW { stateMask: LVIS_STATEIMAGEMASK, state: windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(if checked { 2 << 12 } else { 1 << 12 }), ..Default::default() };
+    let lv = LVITEMW {
+        stateMask: LVIS_STATEIMAGEMASK,
+        state: windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(if checked {
+            2 << 12
+        } else {
+            1 << 12
+        }),
+        ..Default::default()
+    };
     send(list, LVM_SETITEMSTATE, row, &lv as *const _ as isize);
 }
 
 fn set_text(list: HWND, row: usize, text: &str) {
     let mut w = wide(text);
-    let lv = LVITEMW { pszText: PWSTR(w.as_mut_ptr()), ..Default::default() };
+    let lv = LVITEMW {
+        pszText: PWSTR(w.as_mut_ptr()),
+        ..Default::default()
+    };
     send(list, LVM_SETITEMTEXTW, row, &lv as *const _ as isize);
 }
 
 fn select(list: HWND, row: usize) {
-    let both = windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0);
-    let lv = LVITEMW { stateMask: both, state: both, ..Default::default() };
+    let both =
+        windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0);
+    let lv = LVITEMW {
+        stateMask: both,
+        state: both,
+        ..Default::default()
+    };
     send(list, LVM_SETITEMSTATE, row, &lv as *const _ as isize);
     send(list, LVM_ENSUREVISIBLE, row, 0);
 }
@@ -135,13 +208,27 @@ fn select(list: HWND, row: usize) {
 impl Dialog {
     fn init(&mut self, hwnd: HWND) {
         let list = item(hwnd, LIST);
-        send(list, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_CHECKBOXES as usize, LVS_EX_CHECKBOXES as isize);
-        let column = LVCOLUMNW { mask: LVCF_WIDTH, cx: 100, ..Default::default() };
+        send(
+            list,
+            LVM_SETEXTENDEDLISTVIEWSTYLE,
+            LVS_EX_CHECKBOXES as usize,
+            LVS_EX_CHECKBOXES as isize,
+        );
+        let column = LVCOLUMNW {
+            mask: LVCF_WIDTH,
+            cx: 100,
+            ..Default::default()
+        };
         send(list, LVM_INSERTCOLUMNW, 0, &column as *const _ as isize);
         self.quiet = true;
         for (row, it) in self.items.iter().enumerate() {
             let mut w = wide(&it.label);
-            let lv = LVITEMW { mask: LVIF_TEXT, iItem: row as i32, pszText: PWSTR(w.as_mut_ptr()), ..Default::default() };
+            let lv = LVITEMW {
+                mask: LVIF_TEXT,
+                iItem: row as i32,
+                pszText: PWSTR(w.as_mut_ptr()),
+                ..Default::default()
+            };
             send(list, LVM_INSERTITEMW, 0, &lv as *const _ as isize);
             set_check(list, row, it.checked);
         }
@@ -159,7 +246,9 @@ impl Dialog {
     fn update(&mut self, hwnd: HWND) {
         let n = self.items.len();
         let row = self.selected;
-        let Some(it) = self.items.get(row) else { return };
+        let Some(it) = self.items.get(row) else {
+            return;
+        };
         let name = it.key == PKEY_ItemNameDisplay;
         unsafe {
             let _ = EnableWindow(item(hwnd, UP), row > 0);
@@ -167,7 +256,12 @@ impl Dialog {
             let _ = EnableWindow(item(hwnd, SHOW), !it.checked);
             let _ = EnableWindow(item(hwnd, HIDE), it.checked && !name);
             self.quiet = true;
-            let _ = SetDlgItemInt(hwnd, WIDTH, if it.checked { it.width.unwrap_or(0) } else { 0 }, false);
+            let _ = SetDlgItemInt(
+                hwnd,
+                WIDTH,
+                if it.checked { it.width.unwrap_or(0) } else { 0 },
+                false,
+            );
             self.quiet = false;
         }
     }
@@ -201,10 +295,18 @@ impl Dialog {
     fn notify(&mut self, hwnd: HWND, nm: &NMLISTVIEW) -> Option<isize> {
         let row = usize::try_from(nm.iItem).ok()?;
         let image = |state: u32| (state & LVIS_STATEIMAGEMASK.0) >> 12;
-        let changes_check = nm.uChanged.0 & LVIF_STATE.0 != 0 && image(nm.uNewState) != image(nm.uOldState) && image(nm.uOldState) != 0;
+        let changes_check = nm.uChanged.0 & LVIF_STATE.0 != 0
+            && image(nm.uNewState) != image(nm.uOldState)
+            && image(nm.uOldState) != 0;
         match nm.hdr.code {
             // Nome stays checked.
-            LVN_ITEMCHANGING if changes_check && image(nm.uNewState) == 1 && self.items.get(row)?.key == PKEY_ItemNameDisplay => Some(1),
+            LVN_ITEMCHANGING
+                if changes_check
+                    && image(nm.uNewState) == 1
+                    && self.items.get(row)?.key == PKEY_ItemNameDisplay =>
+            {
+                Some(1)
+            }
             LVN_ITEMCHANGED if nm.uChanged.0 & LVIF_STATE.0 != 0 => {
                 if changes_check {
                     self.items.get_mut(row)?.checked = image(nm.uNewState) == 2;
@@ -238,7 +340,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_NOTIFY => {
             let hdr = &*(lparam.0 as *const NMHDR);
-            if hdr.idFrom != LIST as usize || (hdr.code != LVN_ITEMCHANGING && hdr.code != LVN_ITEMCHANGED) {
+            if hdr.idFrom != LIST as usize
+                || (hdr.code != LVN_ITEMCHANGING && hdr.code != LVN_ITEMCHANGED)
+            {
                 return 0;
             }
             match dialog.notify(hwnd, &*(lparam.0 as *const NMLISTVIEW)) {

@@ -1,6 +1,3 @@
-//! Native automatic destinations for Explorer's ordered Quick access pins.
-//! The shell owns serialization; never edit the user's DestList stream ourselves.
-//! ABI reference: 0x5bfa/JumpListManager, COMInterop/IAutomaticDestinationList.cs.
 use super::{com_init, Pidl};
 use windows::{
     core::{IUnknown, IUnknown_Vtbl, Interface, GUID, HRESULT, PCWSTR},
@@ -30,6 +27,7 @@ struct AutomaticVtbl {
         *mut std::ffi::c_void,
         *mut i32,
     ) -> HRESULT,
+    remove: unsafe extern "system" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> HRESULT,
 }
 impl Automatic {
     fn new() -> windows::core::Result<Self> {
@@ -89,6 +87,19 @@ fn apply_plan(plan: &[(String, usize)]) -> Result<(), String> {
             .ok()
             .map_err(|e| e.to_string())?;
         }
+    }
+    notify_changed();
+    Ok(())
+}
+
+pub fn unpin(pidl: &Pidl) -> Result<(), String> {
+    let list = Automatic::new().map_err(|error| error.to_string())?;
+    unsafe {
+        let item: IShellItem =
+            SHCreateItemFromIDList(pidl.ptr()).map_err(|error| error.to_string())?;
+        (list.vtable().remove)(list.as_raw(), item.as_raw())
+            .ok()
+            .map_err(|error| error.to_string())?;
     }
     notify_changed();
     Ok(())

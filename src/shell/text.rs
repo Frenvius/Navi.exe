@@ -1,6 +1,3 @@
-//! Explorer text layout: GDI word breaking for DirectUI icon labels, and DirectWrite's
-//! fractional advances for XAML labels and other measured text.
-
 use windows::core::w;
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
@@ -13,6 +10,7 @@ pub struct IconLabel {
     pub full: String,
     pub collapsed: String,
     pub lines: u8,
+    pub width: u32,
 }
 
 struct LabelDc {
@@ -75,6 +73,7 @@ impl LabelDc {
         let mut lines = Vec::new();
         let mut starts = Vec::new();
         let mut at = 0;
+        let mut width_used = Some(0);
         while at < wide.len() {
             let mut rest = wide[at..].to_vec();
             let mut rect = RECT {
@@ -103,6 +102,26 @@ impl LabelDc {
             let count = (params.uiLengthDrawn as usize)
                 .max(fallback)
                 .min(wide.len() - at);
+            let mut extent = windows::Win32::Foundation::SIZE::default();
+            if unsafe { GetTextExtentPoint32W(self.dc, &wide[at..at + count], &mut extent) }
+                .as_bool()
+            {
+                if extent.cx > width {
+                    let visible = String::from_utf16_lossy(&wide[at..at + count]);
+                    let trimmed: Vec<u16> = visible.trim_end().encode_utf16().collect();
+                    if !trimmed.is_empty()
+                        && !unsafe { GetTextExtentPoint32W(self.dc, &trimmed, &mut extent) }
+                            .as_bool()
+                    {
+                        eprintln!("native label visible extent unavailable");
+                        width_used = None;
+                    }
+                }
+                width_used = width_used.map(|width| width.max(extent.cx));
+            } else {
+                eprintln!("native label extent unavailable");
+                width_used = None;
+            }
             starts.push(at);
             lines.push(
                 String::from_utf16_lossy(&wide[at..at + count])
@@ -116,7 +135,6 @@ impl LabelDc {
             full.clone()
         } else {
             let tail = &wide[starts[3]..];
-            // DT_MODIFYSTRING may write four extra UTF-16 code units beyond cchText.
             let mut buffer = vec![0u16; tail.len() + 4];
             buffer[..tail.len()].copy_from_slice(tail);
             let mut rect = RECT {
@@ -135,8 +153,6 @@ impl LabelDc {
             }
             let end = buffer.iter().position(|&c| c == 0).unwrap_or(tail.len());
             let last = String::from_utf16_lossy(&buffer[..end]);
-            // DirectUI uses U+2026, not GDI's three periods. Reserve that glyph's width
-            // plus DirectUI's 3px ellipsis margin before asking GDI which prefix fits.
             let last = last
                 .strip_suffix("...")
                 .map(|s| format!("{s}…"))
@@ -147,6 +163,7 @@ impl LabelDc {
             full,
             collapsed,
             lines: lines.len().clamp(1, 255) as u8,
+            width: width_used.map_or(0, |measured| measured.max(0).min(width) as u32 + 4),
         }
     }
 }
@@ -211,8 +228,40 @@ pub fn underline_widths_at(text: &str, size: i32, limit: f32) -> Vec<f32> {
     }
 }
 
-/// DirectUI's filename layout: GDI word breaking (hyphens stay inside a word),
-/// and end ellipsis applied to the remaining text on the fourth line.
+#[cfg(test)]
+mod native_label_tests {
+    #[test]
+    fn measured_name_boxes_preserve_spaces_only_while_they_fit() {
+        assert_eq!(super::icon_label("Alpha folder", 61).width, 38);
+        assert_eq!(
+            super::icon_label("Beta folder with a long name", 61).width,
+            64
+        );
+        assert_eq!(
+            super::icon_label("Beta folder with a long name", 92).width,
+            96
+        );
+        assert_eq!(super::icon_label("braille-tables.txt", 61).width, 61);
+    }
+}
+
+pub fn tile_label(text: &str, width: i32) -> String {
+    let label = icon_label(text, width);
+    let mut lines = label.full.lines();
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    if lines.next().is_none() {
+        return text.to_owned();
+    }
+    let tail = text.get(first.len()..).unwrap_or_default();
+    format!(
+        "{first}{}\n{}",
+        if tail.starts_with(' ') { " " } else { "" },
+        tail.trim_start()
+    )
+}
+
 pub fn icon_label(text: &str, width: i32) -> IconLabel {
     LABEL_DC.with(|dc| {
         dc.as_ref()
@@ -221,6 +270,7 @@ pub fn icon_label(text: &str, width: i32) -> IconLabel {
                 full: text.to_string(),
                 collapsed: text.to_string(),
                 lines: 1,
+                width: 0,
             })
     })
 }
@@ -354,37 +404,5 @@ pub fn wrap_whole_words(
         } else {
             lines
         }
-    }
-}
-
-/// A line's width in a font of the system's (family, px, weight), as DirectWrite lays it out.
-pub fn width(text: &str, family: &str, size: f32, weight: i32) -> f32 {
-    use windows::core::PCWSTR;
-    use windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT;
-    let wide: Vec<u16> = text.encode_utf16().collect();
-    let family: Vec<u16> = family.encode_utf16().chain(Some(0)).collect();
-    unsafe {
-        let Ok(factory) = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) else {
-            return 0.0;
-        };
-        let Ok(format) = factory.CreateTextFormat(
-            PCWSTR(family.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT(weight),
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size,
-            w!(""),
-        ) else {
-            return 0.0;
-        };
-        let Ok(layout) = factory.CreateTextLayout(&wide, &format, f32::MAX, f32::MAX) else {
-            return 0.0;
-        };
-        let mut metrics = DWRITE_TEXT_METRICS::default();
-        if layout.GetMetrics(&mut metrics).is_err() {
-            return 0.0;
-        }
-        metrics.widthIncludingTrailingWhitespace
     }
 }

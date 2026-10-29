@@ -3,13 +3,13 @@ pub mod archive;
 pub mod assoc;
 pub mod backdrop;
 pub mod browser;
-pub mod columns;
 pub mod cloud;
-pub mod jumplist;
+pub mod columns;
 pub mod extmenu;
 pub mod folder_options;
 pub mod gallery;
 pub mod icons;
+pub mod jumplist;
 pub mod library;
 pub mod listing;
 pub mod menu;
@@ -21,12 +21,15 @@ pub mod ops;
 pub mod preview;
 pub mod quick_access;
 pub mod search;
+pub mod share;
 pub mod text;
 pub mod theme;
 pub mod viewstate;
 
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
+};
 use windows::Win32::UI::Shell::Common::{ITEMIDLIST, STRRET};
 use windows::Win32::UI::Shell::{
     ILClone, ILCombine, ILFindLastID, ILFree, ILRemoveLastID, IShellFolder, SHBindToObject,
@@ -37,9 +40,93 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
+struct ComApartment;
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
+thread_local! {
+    static COM_APARTMENT: Option<ComApartment> = unsafe {
+        let result = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if result.is_ok() {
+            Some(ComApartment)
+        } else {
+            if result != windows::Win32::Foundation::RPC_E_CHANGED_MODE {
+                eprintln!("shell COM initialization: {}", windows::core::Error::from_hresult(result));
+            }
+            None
+        }
+    };
+}
+
 pub fn com_init() {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    COM_APARTMENT.with(|_| {});
+}
+
+#[cfg(test)]
+mod com_lifetime_tests {
+    use super::*;
+    use windows::Win32::System::Com::{CoUninitialize, COINIT_MULTITHREADED};
+
+    #[test]
+    fn repeated_shell_initialization_owns_only_one_apartment_reference() {
+        std::thread::spawn(|| {
+            for _ in 0..64 {
+                com_init();
+            }
+            let mut releases = 0;
+            loop {
+                unsafe {
+                    CoUninitialize();
+                }
+                releases += 1;
+                assert!(releases <= 64);
+                let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+                result.ok().unwrap();
+                if result == windows::core::HRESULT(0) {
+                    break;
+                }
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            if releases != 1 {
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+            assert_eq!(releases, 1);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn an_existing_mta_keeps_its_original_apartment_reference() {
+        std::thread::spawn(|| {
+            unsafe {
+                CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap();
+            }
+            for _ in 0..64 {
+                com_init();
+            }
+            unsafe {
+                CoUninitialize();
+            }
+            let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+            result.ok().unwrap();
+            unsafe {
+                CoUninitialize();
+            }
+            assert_eq!(result, windows::core::HRESULT(0));
+        })
+        .join()
+        .unwrap();
     }
 }
 
@@ -57,14 +144,22 @@ impl Pidl {
             }
             let w = wide(id);
             let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-            if let Err(first)=SHParseDisplayName(PCWSTR::from_raw(w.as_ptr()), None, &mut pidl, 0, None){
+            if let Err(first) =
+                SHParseDisplayName(PCWSTR::from_raw(w.as_ptr()), None, &mut pidl, 0, None)
+            {
                 // Some registered virtual folders (notably AppsFolder) return a
                 // desktop-absolute parsing name which only the shell: moniker can
                 // bind again. Preserve the canonical identity, not an FS guess.
-                if !pidl.is_null(){ILFree(Some(pidl));pidl=std::ptr::null_mut();}
-                if !id.starts_with("::{"){return Err(format!("{id}: {}",first.message()));}
-                let moniker=wide(&format!("shell:{id}"));
-                SHParseDisplayName(PCWSTR(moniker.as_ptr()),None,&mut pidl,0,None).map_err(|e|format!("{id}: {}",e.message()))?;
+                if !pidl.is_null() {
+                    ILFree(Some(pidl));
+                    pidl = std::ptr::null_mut();
+                }
+                if !id.starts_with("::{") {
+                    return Err(format!("{id}: {}", first.message()));
+                }
+                let moniker = wide(&format!("shell:{id}"));
+                SHParseDisplayName(PCWSTR(moniker.as_ptr()), None, &mut pidl, 0, None)
+                    .map_err(|e| format!("{id}: {}", e.message()))?;
             }
             Ok(Pidl(pidl))
         }
@@ -133,17 +228,26 @@ impl Pidl {
 }
 
 #[cfg(test)]
-mod namespace_roundtrip_tests{
+mod namespace_roundtrip_tests {
     use super::*;
     #[test]
-    fn native_virtual_parsing_names_roundtrip_to_the_same_folder(){
+    fn native_virtual_parsing_names_roundtrip_to_the_same_folder() {
         com_init();
-        for alias in ["shell:AppsFolder","shell:ControlPanelFolder","shell:Fonts"]{
-            let original=Pidl::parse(alias).unwrap();
-            let name=original.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING);
-            assert!(!name.is_empty(),"{alias}");
-            let parsed=Pidl::parse(&name).unwrap();
-            assert!(unsafe{windows::Win32::UI::Shell::ILIsEqual(original.ptr(),parsed.ptr()).as_bool()},"{alias}: {name}");
+        for alias in [
+            "shell:AppsFolder",
+            "shell:ControlPanelFolder",
+            "shell:Fonts",
+        ] {
+            let original = Pidl::parse(alias).unwrap();
+            let name = original.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING);
+            assert!(!name.is_empty(), "{alias}");
+            let parsed = Pidl::parse(&name).unwrap();
+            assert!(
+                unsafe {
+                    windows::Win32::UI::Shell::ILIsEqual(original.ptr(), parsed.ptr()).as_bool()
+                },
+                "{alias}: {name}"
+            );
             parsed.folder().unwrap();
         }
     }

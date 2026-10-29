@@ -583,32 +583,6 @@ pub fn notify_created(path: &std::path::Path) {
     notify(SHCNE_CREATE, path);
 }
 
-/// "Novo > Atalho": an empty shortcut handed to the Create Shortcut wizard, like Explorer.
-pub fn new_shortcut(hwnd: HWND, folder: &str) -> Result<(), String> {
-    // shell32's "Novo(a) %s" with "Atalho", as Explorer names it.
-    let name = crate::i18n::shell_string(30316, &crate::i18n::system_string("shell32.dll", 4153));
-    let target = unique_child(folder, &name, ".lnk");
-    std::fs::write(&target, b"").map_err(|e| e.to_string())?;
-    let args = format!("appwiz.cpl,NewLinkHere {}", target.to_string_lossy());
-    let file = wide("rundll32.exe");
-    let params = wide(&args);
-    let r = unsafe {
-        windows::Win32::UI::Shell::ShellExecuteW(
-            Some(hwnd),
-            PCWSTR::null(),
-            PCWSTR(file.as_ptr()),
-            PCWSTR(params.as_ptr()),
-            None,
-            SW_SHOWNORMAL,
-        )
-    };
-    if r.0 as isize > 32 {
-        Ok(())
-    } else {
-        Err("could not start the shortcut wizard".into())
-    }
-}
-
 fn unique_child(folder: &str, base: &str, ext: &str) -> std::path::PathBuf {
     let dir = std::path::Path::new(folder);
     let mut n = 1;
@@ -635,13 +609,6 @@ pub fn new_folder(folder: &str) -> Result<String, String> {
     let target = unique_child(folder, &crate::i18n::shell_string(30396, ""), "");
     std::fs::create_dir(&target).map_err(|e| e.to_string())?;
     notify(SHCNE_MKDIR, &target);
-    Ok(target.to_string_lossy().into_owned())
-}
-
-pub fn new_file(folder: &str, base: &str, ext: &str) -> Result<String, String> {
-    let target = unique_child(folder, base, ext);
-    std::fs::File::create(&target).map_err(|e| e.to_string())?;
-    notify(SHCNE_CREATE, &target);
     Ok(target.to_string_lossy().into_owned())
 }
 

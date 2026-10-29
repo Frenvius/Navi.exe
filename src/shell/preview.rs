@@ -1,6 +1,3 @@
-//! The preview pane: the file type's registered preview handler, hosted in a child window
-//! over the pane, as Explorer does.
-
 use windows::core::{w, Interface, GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, LOGFONTW};
@@ -185,14 +182,24 @@ impl Preview {
     pub fn set_rect(&self, rect: RECT) {
         let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
         unsafe {
-            let _ = MoveWindow(self.host, rect.left, rect.top, w, h, true);
-            let _ = self.handler.SetRect(&RECT {
+            if let Err(error) = MoveWindow(self.host, rect.left, rect.top, w, h, true) {
+                eprintln!("preview host resize: {error}");
+            }
+            if let Err(error) = self.handler.SetRect(&RECT {
                 left: 0,
                 top: 0,
                 right: w,
                 bottom: h,
-            });
+            }) {
+                eprintln!("preview handler resize: {error}");
+            }
         }
+    }
+
+    pub fn contains(&self, hwnd: HWND) -> bool {
+        self.host == hwnd
+            || unsafe { windows::Win32::UI::WindowsAndMessaging::IsChild(self.host, hwnd) }
+                .as_bool()
     }
 }
 

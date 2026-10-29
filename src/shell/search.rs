@@ -1,6 +1,3 @@
-//! Search results the way Explorer's search box gets them: a shell search folder scoped to the
-//! current location (Windows Search where indexed, a crawl elsewhere), matching item names.
-
 use windows::core::PCWSTR;
 use windows::Win32::Storage::EnhancedStorage::PKEY_ItemNameDisplay;
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
@@ -167,33 +164,6 @@ pub fn folder(scope: &str, query: &str, options: Options) -> Result<Pidl, String
         factory.SetCondition(&condition).map_err(|e| e.message())?;
 
         Ok(Pidl(factory.GetIDList().map_err(|e| e.message())?))
-    }
-}
-
-pub fn search(
-    scope: &str,
-    query: &str,
-    options: Options,
-) -> Result<(Vec<ShellEntry>, u32), String> {
-    let results = folder(scope, query, options)?;
-    unsafe {
-        let icon = super::icons::icon_of_pidl(results.ptr()) & 0x00ff_ffff;
-        let entries = listing::list_pidl(&results)?;
-        let entries = entries
-            .into_iter()
-            .filter(|e| {
-                // "Pasta atual": only what's right in the folder.
-                let here = !options.current_folder_only
-                    || std::path::Path::new(&e.path).parent().is_some_and(|p| {
-                        p.to_string_lossy()
-                            .eq_ignore_ascii_case(scope.trim_end_matches('\\'))
-                    });
-                // Without "Arquivos do sistema", the files marked system are left out.
-                let system = options.system_files || !is_system(&e.path);
-                here && system
-            })
-            .collect();
-        Ok((entries, icon))
     }
 }
 

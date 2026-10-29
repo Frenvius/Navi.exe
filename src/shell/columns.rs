@@ -1,6 +1,3 @@
-//! Details view columns: what the property system says about each (its header text,
-//! alignment and default width), and the items' values as Explorer formats them.
-
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Foundation::PROPERTYKEY;
@@ -136,10 +133,19 @@ impl Items {
     }
 }
 
-/// An item's values for the columns, formatted for display (empty when unset).
-pub fn texts(items: &Items, path: &str, keys: &[PROPERTYKEY]) -> Vec<String> {
+pub fn texts_with_id(
+    items: &Items,
+    path: &str,
+    keys: &[PROPERTYKEY],
+    absolute: &[u8],
+) -> Vec<String> {
     unsafe {
-        let Some(item) = items.item(path) else {
+        let retained: Option<IShellItem2> = if absolute.is_empty() {
+            None
+        } else {
+            windows::Win32::UI::Shell::SHCreateItemFromIDList(absolute.as_ptr().cast()).ok()
+        };
+        let Some(item) = retained.or_else(|| items.item(path)) else {
             return vec![String::new(); keys.len()];
         };
         keys.iter()

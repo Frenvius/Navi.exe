@@ -1,9 +1,3 @@
-//! The UI language, like Explorer's: the user's display language, pt-BR when it's Portuguese and
-//! English otherwise. The code only has keys ("cmd.sort"); `translations/<lang>/LC_MESSAGES/*.po`
-//! gives the text, both to Slint's `@tr()` (bundled at build time) and to `tr()` here. A key
-//! without text shows as itself. Strings the shell already has (group names, "free of", default
-//! names) come from its own resources, in whatever language Windows shows.
-
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -29,11 +23,6 @@ pub fn language() -> &'static str {
             "en"
         }
     })
-}
-
-/// Picks Slint's bundled translation for the display language (after the first window).
-pub fn select_ui_language() {
-    let _ = slint::select_bundled_translation(language());
 }
 
 fn table() -> &'static HashMap<String, String> {
@@ -217,16 +206,14 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Every key the code uses: `tr("…")`/`trf("…"` in src/, `@tr("…"` in ui/, and the keys
-    /// handed to `tr` through constants (`VIEW_MODES`, `undo::label`, `format::count`).
     fn used_keys() -> BTreeSet<String> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut keys = BTreeSet::new();
         let mut files = Vec::new();
-        for dir in ["src", "src/app", "src/shell", "ui"] {
+        for dir in ["src", "src/app", "src/shell", "src/ui"] {
             for entry in std::fs::read_dir(root.join(dir)).unwrap().flatten() {
                 let path = entry.path();
-                if path.extension().is_some_and(|e| e == "rs" || e == "slint") {
+                if path.extension().is_some_and(|e| e == "rs") {
                     files.push(path);
                 }
             }
@@ -238,11 +225,9 @@ mod tests {
         };
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
-            // Every quoted string that looks like a key ("cmd.sort") and has a catalog prefix
-            // (all the pieces between quotes, so escaped quotes can't throw the pairing off).
             for quoted in text.split('"') {
                 let prefix = quoted.split('.').next().unwrap_or("");
-                if is_key(quoted) && PREFIXES.contains(&prefix) && !quoted.ends_with(".slint") {
+                if is_key(quoted) && PREFIXES.contains(&prefix) {
                     keys.insert(quoted.to_string());
                 }
             }

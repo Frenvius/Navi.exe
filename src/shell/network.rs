@@ -1,12 +1,10 @@
-//! Network namespace classification and read-only effective firewall group state.
-//! No rule, profile, service, discovery or sharing setters are exposed here.
 use windows::{
     core::{BSTR, GUID, PCWSTR},
     Win32::System::{
         Com::{
             CoCreateInstance, IDispatch, CLSCTX_INPROC_SERVER, DISPATCH_PROPERTYGET, DISPPARAMS,
         },
-        Variant::{VariantToBoolean, VariantToInt32, VARIANT},
+        Variant::{VariantToBoolean, VARIANT},
     },
 };
 
@@ -21,7 +19,6 @@ pub fn is_computer(path: &str) -> bool {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Status {
-    pub profiles: i32,
     pub discovery: bool,
     pub sharing: bool,
 }
@@ -85,7 +82,6 @@ pub fn status() -> windows::core::Result<Status> {
             None,
             CLSCTX_INPROC_SERVER,
         )?;
-        let profiles = VariantToInt32(&get(&policy, "CurrentProfileTypes", vec![])?)?;
         let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
         let group = |resource| -> windows::core::Result<bool> {
             let name = BSTR::from(format!(r"@{root}\System32\FirewallAPI.dll,-{resource}"));
@@ -97,7 +93,6 @@ pub fn status() -> windows::core::Result<Status> {
             .as_bool())
         };
         Ok(Status {
-            profiles,
             discovery: group(32752)?,
             sharing: group(28502)?,
         })

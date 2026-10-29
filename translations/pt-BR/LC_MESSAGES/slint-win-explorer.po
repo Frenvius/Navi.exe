@@ -1,5 +1,4 @@
-# Brazilian Portuguese for slint-win-explorer. The msgids are the keys the code uses; both Slint's
-# @tr() (bundled at build time) and src/i18n.rs read this file. Strings the shell has
+# Brazilian Portuguese for slint-win-explorer. The msgids are the keys read by src/i18n.rs. Strings the shell has
 # itself (group names, default names, "free of") come from its resources instead.
 # Measured on the real Explorer, or read from Windows' pt-BR resources (tools/winstr.py).
 msgid ""
@@ -103,10 +102,6 @@ msgstr "Mostrar ou ocultar o painel de detalhes."
 
 msgid "cmd.details"
 msgstr "Detalhes"
-
-# Columns and properties
-msgid "column.name"
-msgstr "Nome"
 
 msgid "column.modified"
 msgstr "Data de modificação"
@@ -374,9 +369,6 @@ msgstr "Dispositivos e unidades"
 msgid "tiles.network"
 msgstr "Locais de rede"
 
-msgid "file.new-text"
-msgstr "Novo Documento de Texto"
-
 msgid "tab.close"
 msgstr "Fechar guia"
 
@@ -437,7 +429,6 @@ msgstr "Algumas associações foram alteradas fora do app. Restaure as associaç
 msgid "settings.default.error"
 msgstr "Não foi possível atualizar o gerenciador padrão: {}"
 
-
 msgid "settings.default.invalid-backup"
 msgstr "O backup das associações originais é inválido. Nenhuma chave fora do escopo foi alterada."
 
@@ -459,3 +450,8 @@ msgstr "Outro programa alterou uma associação. Desfaça essa alteração antes
 msgid "settings.default.unsupported-handler"
 msgstr "Um manipulador de pastas existente é incompatível com esta configuração."
 
+msgid "cmd.sort.tip"
+msgstr "Opções de classificação e grupo."
+
+msgid "cmd.view.tip"
+msgstr "Opções de layout e exibição."

@@ -1,7 +1,3 @@
-//! A folder's saved view (Explorer's "bags"): view mode, sort, grouping and column widths,
-//! as the user left them in Explorer, or the defaults of the folder's type (Downloads is
-//! grouped by date, Pictures shows icons...).
-
 use windows::core::{IUnknown, Interface, GUID, PCWSTR};
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::System::Com::StructuredStorage::IPropertyBag;
@@ -120,14 +116,6 @@ pub fn read(path: &str) -> ViewState {
     }
     apply_saved(&saved, &mut state);
     state
-}
-
-/// A saved value only, without a template's default size (Gallery has its own default).
-pub fn saved_icon_size(path:&str)->Option<u32>{
-    com_init();let pidl=Pidl::parse(path).ok()?;let kind=persistence_type(&pidl,folder_type(&pidl));
-    let name=wide(&format!(r"Shell\{{{kind:?}}}"));
-    let bag:IPropertyBag=unsafe{SHGetViewStatePropertyBag(Some(pidl.ptr()),PCWSTR(name.as_ptr()),SHGVSPB_FOLDERNODEFAULTS).ok()?};
-    read_u32(&bag,"IconSize")
 }
 
 fn apply_saved(saved: &Saved, state: &mut ViewState) {
@@ -287,7 +275,9 @@ fn folder_view(pidl: &Pidl) -> Option<ViewState> {
 }
 
 #[cfg(test)]
-pub(crate) fn native_view_for_test(path:&str)->Option<ViewState>{folder_view(&Pidl::parse(path).ok()?)}
+pub(crate) fn native_view_for_test(path: &str) -> Option<ViewState> {
+    folder_view(&Pidl::parse(path).ok()?)
+}
 
 /// Where a folder's view was saved: its bag, or Explorer's older "Streams" store, which it
 /// keeps the Recycle Bin's in.
@@ -495,7 +485,7 @@ pub fn write(path: &str, view: &ViewState) {
     }
     if !view.sort.is_empty() {
         let mut bytes = (view.sort.len().min(16) as u32).to_le_bytes().to_vec();
-        for (key,descending) in view.sort.iter().take(16){
+        for (key, descending) in view.sort.iter().take(16) {
             push_key(&mut bytes, key);
             bytes.extend_from_slice(&(if *descending { -1i32 } else { 1 }).to_le_bytes());
         }
@@ -597,12 +587,20 @@ pub fn folder_type(pidl: &Pidl) -> GUID {
                 return kind;
             }
         }
-        let path=pidl.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING);
-        if super::library::is_library(&path){
-            let canonical=super::library::folder_type(&path).and_then(|kind|{
-                winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE).open_subkey(format!(r"{}\{{{kind:?}}}",FOLDER_TYPES)).ok()?.get_value::<String,_>("CanonicalName").ok()
-            }).unwrap_or_else(||"Generic".into());
-            if let Some(kind)=type_by_name(&format!("{canonical}.Library")){return kind;}
+        let path = pidl.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING);
+        if super::library::is_library(&path) {
+            let canonical = super::library::folder_type(&path)
+                .and_then(|kind| {
+                    winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+                        .open_subkey(format!(r"{}\{{{kind:?}}}", FOLDER_TYPES))
+                        .ok()?
+                        .get_value::<String, _>("CanonicalName")
+                        .ok()
+                })
+                .unwrap_or_else(|| "Generic".into());
+            if let Some(kind) = type_by_name(&format!("{canonical}.Library")) {
+                return kind;
+            }
         }
         let manager: windows::core::Result<IKnownFolderManager> =
             CoCreateInstance(&KnownFolderManager, None, CLSCTX_INPROC_SERVER);

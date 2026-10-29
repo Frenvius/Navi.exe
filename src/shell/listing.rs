@@ -212,20 +212,40 @@ pub enum FolderOption {
     Compact,
 }
 
-/// Changes a global folder option, as Explorer's "Mostrar" menu does.
 pub fn set_option(option: FolderOption, on: bool) {
     use windows::Win32::UI::Shell::{
         SHGetSetSettings, SHELLSTATEA, SSF_AUTOCHECKSELECT, SSF_SHOWALLOBJECTS, SSF_SHOWEXTENSIONS,
     };
     if option == FolderOption::Compact {
         use winreg::enums::HKEY_CURRENT_USER;
-        if let Ok((key, _)) = winreg::RegKey::predef(HKEY_CURRENT_USER).create_subkey(ADVANCED) {
-            let _ = key.set_value("UseCompactMode", &(on as u32));
+        let changed = winreg::RegKey::predef(HKEY_CURRENT_USER)
+            .create_subkey(ADVANCED)
+            .and_then(|(key, _)| key.set_value("UseCompactMode", &(on as u32)));
+        if let Err(error) = changed {
+            eprintln!("compact view preference: {error}");
+            return;
+        }
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::*;
+            if SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                windows::Win32::Foundation::WPARAM(0),
+                LPARAM(windows::core::w!("ShellState").as_ptr() as isize),
+                SMTO_ABORTIFHUNG,
+                100,
+                None,
+            )
+            .0 == 0
+            {
+                eprintln!(
+                    "compact view notification: {}",
+                    windows::core::Error::from_win32()
+                );
+            }
         }
         return;
     }
-    // SHELLSTATE bits: fShowAllObjects 0 and fShowExtensions 1 in the first field,
-    // fAutoCheckSelect 3 in the second. The shell notifies the other windows.
     let (mask, first, second) = match option {
         FolderOption::HiddenItems => (SSF_SHOWALLOBJECTS, 1 << 0, 0),
         FolderOption::Extensions => (SSF_SHOWEXTENSIONS, 1 << 1, 0),
@@ -304,7 +324,14 @@ pub fn for_each_pidl(
                 .is_empty()
             || super::archive::root(&parent_path).is_some();
 
-        let mut icon_time = Duration::ZERO;
+        let mut reader = EntryReader {
+            parent,
+            folder,
+            parent_path,
+            origins,
+            virtual_folder,
+            icon_time: Duration::ZERO,
+        };
         loop {
             let mut child: [*mut ITEMIDLIST; 1] = [std::ptr::null_mut()];
             let mut fetched = 0u32;
@@ -314,117 +341,8 @@ pub fn for_each_pidl(
             }
             let child = child[0];
 
-            let mut attrs = (SFGAO_FOLDER
-                | SFGAO_STREAM
-                | SFGAO_FILESYSTEM
-                | SFGAO_HIDDEN
-                | SFGAO_LINK
-                | SFGAO_GHOSTED
-                | SFGAO_CANMOVE
-                | SFGAO_CANCOPY
-                | SFGAO_CANRENAME
-                | SFGAO_CANDELETE)
-                .0;
-            let _ = folder.GetAttributesOf(&[child as *const _], &mut attrs);
-            let has = |f: u32| attrs & f != 0;
+            let keep_going = emit(reader.read(child));
 
-            let abs = ILCombine(Some(parent.ptr()), Some(child));
-            let name = display_name(&folder, child, SHGDNF(SHGDN_INFOLDER.0 | SHGDN_NORMAL.0));
-            let mut path = display_name(&folder, child, SHGDN_FORPARSING);
-            if path.is_empty() {
-                path = super::name_of(abs, SIGDN_DESKTOPABSOLUTEPARSING);
-            }
-            let is_link = has(SFGAO_LINK.0);
-
-            let is_drive = path.len() <= 3 && path.ends_with(":\\");
-            let item: Option<IShellItem2> = SHCreateItemWithParent(None, &folder, child).ok();
-            let (size, modified, created, type_name, total, free) = match &item {
-                Some(it) => (
-                    it.GetUInt64(&PKEY_Size).unwrap_or(0),
-                    it.GetFileTime(&PKEY_DateModified)
-                        .map(filetime_to_ms)
-                        .unwrap_or(0),
-                    it.GetFileTime(&PKEY_DateCreated)
-                        .map(filetime_to_ms)
-                        .unwrap_or(0),
-                    string_prop(it, &PKEY_ItemTypeText),
-                    if is_drive {
-                        it.GetUInt64(&PKEY_Capacity).unwrap_or(0)
-                    } else {
-                        0
-                    },
-                    if is_drive {
-                        it.GetUInt64(&PKEY_FreeSpace).unwrap_or(0)
-                    } else {
-                        0
-                    },
-                ),
-                None => (0, 0, 0, String::new(), 0, 0),
-            };
-
-            let deferred = icon_time >= SYNC_ICON_BUDGET
-                && !is_link
-                && has(SFGAO_FILESYSTEM.0)
-                && icons::has_own_icon(&folder, child);
-            let (icon, icon_pending) = if deferred {
-                (icons::generic_icon(&path), true)
-            } else {
-                let started = Instant::now();
-                let icon = icons::icon_of(&folder, child, abs, is_link);
-                icon_time += started.elapsed();
-                (icon, false)
-            };
-            let file_attributes = item
-                .as_ref()
-                .and_then(|it| {
-                    it.GetUInt32(&windows::Win32::Storage::EnhancedStorage::PKEY_FileAttributes)
-                        .ok()
-                })
-                .unwrap_or(0);
-
-            let keep_going = emit(ShellEntry {
-                photo: if parent_path.to_ascii_lowercase().contains("e88865ea-0e1c-4e20-9aa6-edcd0212c87c") {item.as_ref().map(super::gallery::photo)} else {None},
-                library_origin: super::library::origin_for(&path, &origins),
-                name,
-                path,
-                is_dir: has(SFGAO_FOLDER.0) && !has(SFGAO_STREAM.0),
-                is_fs: has(SFGAO_FILESYSTEM.0),
-                is_link,
-                hidden: has(SFGAO_HIDDEN.0) || has(SFGAO_GHOSTED.0),
-                size,
-                modified,
-                created,
-                type_name,
-                icon,
-                icon_pending,
-                file_attributes,
-                total,
-                free,
-                can_move: has(SFGAO_CANMOVE.0),
-                can_copy: has(SFGAO_CANCOPY.0),
-                can_rename: has(SFGAO_CANRENAME.0),
-                can_delete: has(SFGAO_CANDELETE.0),
-                child: if virtual_folder {
-                    std::slice::from_raw_parts(
-                        child as *const u8,
-                        windows::Win32::UI::Shell::ILGetSize(Some(child)) as usize,
-                    )
-                    .to_vec()
-                } else {
-                    Vec::new()
-                },
-                absolute: if virtual_folder || !has(SFGAO_FILESYSTEM.0) {
-                    std::slice::from_raw_parts(
-                        abs as *const u8,
-                        windows::Win32::UI::Shell::ILGetSize(Some(abs)) as usize,
-                    )
-                    .to_vec()
-                } else {
-                    Vec::new()
-                },
-            });
-
-            ILFree(Some(abs));
             CoTaskMemFree(Some(child as *const _));
             if !keep_going {
                 break;
@@ -484,7 +402,9 @@ pub fn crumbs(id: &str) -> Result<Vec<Crumb>, String> {
         cur = p.parent();
     }
     chain.reverse();
-    if let Some(first) = chain.first_mut() {first.nav_root = nav_root;}
+    if let Some(first) = chain.first_mut() {
+        first.nav_root = nav_root;
+    }
     Ok(chain)
 }
 
@@ -625,16 +545,9 @@ fn top_of(mut cur: Pidl) -> Option<Pidl> {
 /// Which of an item's property lists to read (its file type's registry lists).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PropList {
-    /// "Conteúdo": the name, then slots under it, in a middle and in a right column.
     Content,
-    /// The same in search results, which have their own list (the date under the name, the
-    /// folder in the middle, the size on the right).
     ContentSearch,
-    /// "Blocos": the lines under the name.
     Tile,
-    /// The hover tip.
-    InfoTip,
-    /// Native details-pane summary, retaining enumerated namespace identities.
     Pane,
 }
 
@@ -707,7 +620,7 @@ pub fn prop_list_with_id(path: &str, list: PropList, id: &[u8]) -> Vec<Option<(S
     use windows::core::PCWSTR;
     use windows::Win32::Storage::EnhancedStorage::{
         PKEY_ItemNameDisplay, PKEY_PropList_ContentViewModeForBrowse,
-        PKEY_PropList_ContentViewModeForSearch, PKEY_PropList_InfoTip, PKEY_PropList_TileInfo,
+        PKEY_PropList_ContentViewModeForSearch, PKEY_PropList_TileInfo,
     };
     use windows::Win32::UI::Shell::PropertiesSystem::{
         IPropertyDescription, IPropertyDescriptionList, PDFF_DEFAULT, PDVF_HIDELABEL,
@@ -718,7 +631,6 @@ pub fn prop_list_with_id(path: &str, list: PropList, id: &[u8]) -> Vec<Option<(S
         PropList::Content => PKEY_PropList_ContentViewModeForBrowse,
         PropList::ContentSearch => PKEY_PropList_ContentViewModeForSearch,
         PropList::Tile => PKEY_PropList_TileInfo,
-        PropList::InfoTip => PKEY_PropList_InfoTip,
         PropList::Pane => windows::Win32::Storage::EnhancedStorage::PKEY_PropList_PreviewDetails,
     };
     let w = super::wide(path);
@@ -774,4 +686,217 @@ pub fn prop_list_with_id(path: &str, list: PropList, id: &[u8]) -> Vec<Option<(S
         }
     }
     out
+}
+
+struct EntryReader<'a> {
+    parent: &'a Pidl,
+    folder: windows::Win32::UI::Shell::IShellFolder,
+    parent_path: String,
+    origins: Vec<super::library::Origin>,
+    virtual_folder: bool,
+    icon_time: Duration,
+}
+
+impl EntryReader<'_> {
+    unsafe fn read(&mut self, child: *mut ITEMIDLIST) -> ShellEntry {
+        let mut attrs = (SFGAO_FOLDER
+            | SFGAO_STREAM
+            | SFGAO_FILESYSTEM
+            | SFGAO_HIDDEN
+            | SFGAO_LINK
+            | SFGAO_GHOSTED
+            | SFGAO_CANMOVE
+            | SFGAO_CANCOPY
+            | SFGAO_CANRENAME
+            | SFGAO_CANDELETE)
+            .0;
+        let _ = self
+            .folder
+            .GetAttributesOf(&[child as *const _], &mut attrs);
+        let has = |f: u32| attrs & f != 0;
+
+        let abs = ILCombine(Some(self.parent.ptr()), Some(child));
+        let name = display_name(
+            &self.folder,
+            child,
+            SHGDNF(SHGDN_INFOLDER.0 | SHGDN_NORMAL.0),
+        );
+        let mut path = display_name(&self.folder, child, SHGDN_FORPARSING);
+        if path.is_empty() {
+            path = super::name_of(abs, SIGDN_DESKTOPABSOLUTEPARSING);
+        }
+        let is_link = has(SFGAO_LINK.0);
+
+        let is_drive = path.len() <= 3 && path.ends_with(":\\");
+        let item: Option<IShellItem2> = SHCreateItemWithParent(None, &self.folder, child).ok();
+        let (size, modified, created, type_name, total, free) = match &item {
+            Some(it) => (
+                it.GetUInt64(&PKEY_Size).unwrap_or(0),
+                it.GetFileTime(&PKEY_DateModified)
+                    .map(filetime_to_ms)
+                    .unwrap_or(0),
+                it.GetFileTime(&PKEY_DateCreated)
+                    .map(filetime_to_ms)
+                    .unwrap_or(0),
+                string_prop(it, &PKEY_ItemTypeText),
+                if is_drive {
+                    it.GetUInt64(&PKEY_Capacity).unwrap_or(0)
+                } else {
+                    0
+                },
+                if is_drive {
+                    it.GetUInt64(&PKEY_FreeSpace).unwrap_or(0)
+                } else {
+                    0
+                },
+            ),
+            None => (0, 0, 0, String::new(), 0, 0),
+        };
+
+        let deferred = self.icon_time >= SYNC_ICON_BUDGET
+            && !is_link
+            && has(SFGAO_FILESYSTEM.0)
+            && icons::has_own_icon(&self.folder, child);
+        let (icon, icon_pending) = if deferred {
+            (icons::generic_icon(&path), true)
+        } else {
+            let started = Instant::now();
+            let icon = icons::icon_of(&self.folder, child, abs, is_link);
+            self.icon_time += started.elapsed();
+            (icon, false)
+        };
+        let file_attributes = item
+            .as_ref()
+            .and_then(|it| {
+                it.GetUInt32(&windows::Win32::Storage::EnhancedStorage::PKEY_FileAttributes)
+                    .ok()
+            })
+            .unwrap_or(0);
+
+        let entry = ShellEntry {
+            photo: if self
+                .parent_path
+                .to_ascii_lowercase()
+                .contains("e88865ea-0e1c-4e20-9aa6-edcd0212c87c")
+            {
+                item.as_ref().map(super::gallery::photo)
+            } else {
+                None
+            },
+            library_origin: super::library::origin_for(&path, &self.origins),
+            name,
+            path,
+            is_dir: has(SFGAO_FOLDER.0) && !has(SFGAO_STREAM.0),
+            is_fs: has(SFGAO_FILESYSTEM.0),
+            is_link,
+            hidden: has(SFGAO_HIDDEN.0) || has(SFGAO_GHOSTED.0),
+            size,
+            modified,
+            created,
+            type_name,
+            icon,
+            icon_pending,
+            file_attributes,
+            total,
+            free,
+            can_move: has(SFGAO_CANMOVE.0),
+            can_copy: has(SFGAO_CANCOPY.0),
+            can_rename: has(SFGAO_CANRENAME.0),
+            can_delete: has(SFGAO_CANDELETE.0),
+            child: if self.virtual_folder {
+                std::slice::from_raw_parts(
+                    child as *const u8,
+                    windows::Win32::UI::Shell::ILGetSize(Some(child)) as usize,
+                )
+                .to_vec()
+            } else {
+                Vec::new()
+            },
+            absolute: if self.virtual_folder || !has(SFGAO_FILESYSTEM.0) {
+                std::slice::from_raw_parts(
+                    abs as *const u8,
+                    windows::Win32::UI::Shell::ILGetSize(Some(abs)) as usize,
+                )
+                .to_vec()
+            } else {
+                Vec::new()
+            },
+        };
+
+        ILFree(Some(abs));
+        entry
+    }
+}
+
+pub fn read_file(path: &str) -> Result<Option<ShellEntry>, String> {
+    com_init();
+    if !std::path::Path::new(path)
+        .try_exists()
+        .map_err(|error| format!("{path}: {error}"))?
+    {
+        return Ok(None);
+    }
+    let parent_path = std::path::Path::new(path)
+        .parent()
+        .ok_or_else(|| format!("missing parent: {path}"))?
+        .to_string_lossy()
+        .into_owned();
+    let parent = Pidl::parse(&parent_path)?;
+    let absolute = Pidl::parse(path)?;
+    let mut reader = EntryReader {
+        parent: &parent,
+        folder: parent.folder()?,
+        parent_path,
+        origins: Vec::new(),
+        virtual_folder: false,
+        icon_time: Duration::ZERO,
+    };
+    let child = unsafe { windows::Win32::UI::Shell::ILFindLastID(absolute.ptr()) };
+    let entry = unsafe { reader.read(child as *mut _) };
+    let options = settings();
+    Ok(((!entry.hidden || options.show_hidden)
+        && (entry.file_attributes & 4 == 0 || !entry.hidden || options.show_super_hidden))
+        .then_some(entry))
+}
+
+#[cfg(test)]
+mod native_update_tests {
+    use super::*;
+
+    #[test]
+    fn single_entry_refresh_keeps_shell_metadata_without_enumerating_siblings() {
+        let root =
+            std::env::temp_dir().join(format!("sw-native-single-entry-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let file = root.join("native-file.txt");
+        std::fs::write(&file, b"before").unwrap();
+        let path = file.to_str().unwrap();
+        let before = list(root.to_str().unwrap()).unwrap().pop().unwrap();
+        let single = read_file(path).unwrap().unwrap();
+        assert_eq!(
+            (
+                &before.name,
+                &before.type_name,
+                before.size,
+                before.modified,
+                before.created,
+                before.file_attributes,
+                before.icon
+            ),
+            (
+                &single.name,
+                &single.type_name,
+                single.size,
+                single.modified,
+                single.created,
+                single.file_attributes,
+                single.icon
+            )
+        );
+        std::fs::write(&file, b"after: changed size").unwrap();
+        assert_eq!(read_file(path).unwrap().unwrap().size, 19);
+        std::fs::remove_file(&file).unwrap();
+        assert!(read_file(path).unwrap().is_none());
+        std::fs::remove_dir(root).unwrap();
+    }
 }

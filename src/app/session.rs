@@ -1,8 +1,5 @@
-//! App-owned window journals. Explorer's PersistBrowsers is a preference only:
-//! never write the real shell's restart streams or session records.
-use super::{ids, App, Tab};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, rc::Rc, time::Duration};
+
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -18,25 +15,21 @@ use windows::{
             },
         },
         UI::WindowsAndMessaging::{
-            GetWindowPlacement, SetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWNORMAL,
-            WINDOWPLACEMENT,
+            SetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOWPLACEMENT,
         },
     },
 };
-use winreg::{
-    enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE},
-    RegKey,
-};
+use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const ROOT: &str = r"Software\slint-win-explorer\Sessions";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-struct Window {
-    paths: Vec<String>,
+pub struct Window {
+    pub paths: Vec<String>,
     #[serde(default)]
-    libraries: Vec<Option<crate::shell::library::Context>>,
-    active: usize,
-    bounds: [i32; 4],
-    maximized: bool,
+    pub libraries: Vec<Option<crate::shell::library::Context>>,
+    pub active: usize,
+    pub bounds: [i32; 4],
+    pub maximized: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Record {
@@ -45,16 +38,12 @@ struct Record {
     born: u64,
     window: Window,
 }
-struct Tracker {
+pub struct Tracker {
     id: String,
     born: u64,
     last: String,
     registered: bool,
     ending: bool,
-}
-thread_local! {
-    static TRACKER:RefCell<Option<Tracker>>=const{RefCell::new(None)};
-    static TIMER:slint::Timer=slint::Timer::default();
 }
 pub fn enabled() -> bool {
     RegKey::predef(HKEY_CURRENT_USER)
@@ -102,7 +91,6 @@ fn born(pid: u32) -> Option<u64> {
         let result = GetProcessTimes(process, &mut create, &mut exit, &mut kernel, &mut user);
         let _ = CloseHandle(process);
         result.ok()?;
-        // An exited process is no longer live even while its handle remains observable.
         if exit.dwHighDateTime != 0 || exit.dwLowDateTime != 0 {
             return None;
         }
@@ -151,261 +139,235 @@ fn records(key: &RegKey) -> Vec<(String, Record)> {
 fn live(record: &Record) -> bool {
     born(record.pid) == Some(record.born)
 }
-fn snapshot(app: &App) -> Window {
-    let s = app.state.borrow();
-    let mut p = WINDOWPLACEMENT {
-        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-        ..Default::default()
-    };
-    let _ = unsafe { GetWindowPlacement(app.hwnd.get(), &mut p) };
-    let r = p.rcNormalPosition;
-    Window {
-        paths: s.tabs.iter().map(|t| t.path().to_string()).collect(),
-        libraries: s.tabs.iter().map(Tab::library).collect(),
-        active: s.current,
-        bounds: [
-            r.left,
-            r.top,
-            (r.right - r.left).max(200),
-            (r.bottom - r.top).max(100),
-        ],
-        maximized: p.showCmd == SW_SHOWMAXIMIZED.0 as u32,
-    }
+
+pub struct Claim {
+    pub tracker: Tracker,
+    pub restored: Option<Window>,
+    pub others: Vec<(String, Window)>,
 }
-fn apply(app: &Rc<App>, window: &Window) {
-    let tabs = window
-        .paths
-        .iter()
-        .enumerate()
-        .map(|(index, path)| {
-            let mut tab = Tab::new(path);
-            tab.libraries[0] = window.libraries.get(index).cloned().flatten()
-                .filter(|c| crate::shell::library::is_library(&c.library) && c.contains(path));
-            if ids::is_settings(path) { tab.title=crate::i18n::tr("settings.title").into(); }
-            else if let Ok(pidl) = crate::shell::Pidl::parse(path) {
-                tab.title = pidl.name(windows::Win32::UI::Shell::SIGDN_NORMALDISPLAY);
-                tab.icon = unsafe { crate::shell::icons::icon_of_pidl(pidl.ptr()) };
-            } else {
-                tab.title = path.clone();
-            }
-            tab
+
+impl Window {
+    pub fn capture(
+        hwnd: windows::Win32::Foundation::HWND,
+        paths: Vec<String>,
+        libraries: Vec<Option<crate::shell::library::Context>>,
+        active: usize,
+    ) -> Result<Self, String> {
+        let p = crate::frame::normal_placement(hwnd).map_err(|error| error.to_string())?;
+        let r = p.rcNormalPosition;
+        Ok(Self {
+            paths,
+            libraries,
+            active,
+            bounds: [
+                r.left,
+                r.top,
+                (r.right - r.left).max(200),
+                (r.bottom - r.top).max(100),
+            ],
+            maximized: p.showCmd == SW_SHOWMAXIMIZED.0 as u32,
         })
-        .collect();
-    {
-        let mut s = app.state.borrow_mut();
-        s.tabs = tabs;
-        s.current = window.active;
     }
-    let [x, y, width, height] = window.bounds;
-    let mut placement = WINDOWPLACEMENT {
-        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-        showCmd: if window.maximized {
-            SW_SHOWMAXIMIZED.0 as u32
-        } else {
-            SW_SHOWNORMAL.0 as u32
-        },
-        ..Default::default()
-    };
-    placement.rcNormalPosition = windows::Win32::Foundation::RECT {
-        left: x,
-        top: y,
-        right: x + width,
-        bottom: y + height,
-    };
-    let _ = unsafe { SetWindowPlacement(app.hwnd.get(), &placement) };
+
+    pub fn place(&self, hwnd: windows::Win32::Foundation::HWND) -> Result<(), String> {
+        let [x, y, width, height] = self.bounds;
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            showCmd: if self.maximized {
+                SW_SHOWMAXIMIZED.0 as u32
+            } else {
+                SW_SHOWNORMAL.0 as u32
+            },
+            rcNormalPosition: windows::Win32::Foundation::RECT {
+                left: x,
+                top: y,
+                right: x + width,
+                bottom: y + height,
+            },
+            ..Default::default()
+        };
+        unsafe { SetWindowPlacement(hwnd, &placement) }.map_err(|error| error.to_string())
+    }
 }
-/// Restore once across concurrent launches. Explicit folder launches remain explicit;
-/// children/restarters claim only their named window, never the whole session again.
-pub fn start(app: &Rc<App>) {
-    let launch=super::entry::options();
-    let requested=launch.restore;
-    let force_new=launch.mode!=super::entry::Mode::Default;
-    let explicit=launch.path;
+
+fn session_key() -> Result<RegKey, String> {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(ROOT)
+        .map(|(key, _)| key)
+        .map_err(|error| error.to_string())
+}
+
+fn lock() -> Result<Lock, String> {
+    Lock::acquire().ok_or_else(|| "Could not acquire the session journal mutex".into())
+}
+
+fn write(key: &RegKey, id: &str, record: &Record) -> Result<String, String> {
+    let text = serde_json::to_string(record).map_err(|error| error.to_string())?;
+    key.set_value(id, &text)
+        .map_err(|error| error.to_string())?;
+    Ok(text)
+}
+
+fn remove(key: &RegKey, id: &str) -> Result<(), String> {
+    match key.delete_value(id) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub fn claim(
+    launch: &super::entry::Launch,
+    initial: Window,
+    identity: usize,
+) -> Result<Claim, String> {
     let current_born = born(std::process::id()).unwrap_or(0);
-    let id = format!("window-{}-{}", std::process::id(), current_born);
+    let suffix = if identity == 0 {
+        String::new()
+    } else {
+        format!("-{identity:x}")
+    };
     let mut tracker = Tracker {
-        id,
+        id: format!("window-{}-{}{suffix}", std::process::id(), current_born),
         born: current_born,
         last: String::new(),
         registered: false,
         ending: false,
     };
-    let mut restored = false;
-    if let Some(_lock) = Lock::acquire() {
-        if let Ok((key, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(ROOT) {
-            let old = records(&key);
-            let on = enabled();
-            let chosen = if on {
-                if let Some(id) = &requested {
-                    old.iter().find(|(name, _)| name == id).cloned()
-                } else if !force_new && explicit.is_none() && !old.iter().any(|(_, r)| live(r)) {
-                    old.first().cloned()
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            if let Some((id, record)) = &chosen {
-                tracker.id = id.clone();
-                apply(app, &record.window);
-                restored = true;
-            }
-            if !restored {
-                let start = explicit.clone().unwrap_or_else(ids::start_location);
-                app.state.borrow_mut().tabs[0] = Tab::new(&start);
-            }
-            // Claim the primary before spawning other windows, under the same mutex.
-            if on {
-                let record = Record {
-                    version: 1,
-                    pid: std::process::id(),
-                    born: current_born,
-                    window: snapshot(app),
-                };
-                if let Ok(text) = serde_json::to_string(&record) {
-                    let _ = key.set_value(&tracker.id, &text);
-                    tracker.last = text;
-                }
-            }
-            for (id, mut record) in old {
-                if chosen.as_ref().is_some_and(|(name, _)| *name == id) || live(&record) {
-                    continue;
-                }
-                if restored && requested.is_none() {
-                    record.pid = std::process::id();
-                    record.born = current_born;
-                    if let Ok(text) = serde_json::to_string(&record) {
-                        let _ = key.set_value(&id, &text);
-                    }
-                    let spawned = std::env::current_exe().ok().and_then(|exe| {
-                        std::process::Command::new(exe)
-                            .arg("--restore-session")
-                            .arg(&id)
-                            .env_remove("SLINT_TAB_WINDOW")
-                            .spawn()
-                            .ok()
-                    });
-                    if spawned.is_none() {
-                        record.pid = 0;
-                        record.born = 0;
-                        if let Ok(text) = serde_json::to_string(&record) {
-                            let _ = key.set_value(&id, &text);
-                        }
-                    }
-                } else if requested.is_none() {
-                    let _ = key.delete_value(&id);
-                }
-            }
+    let _lock = lock()?;
+    let key = session_key()?;
+    let old = records(&key);
+    let on = enabled();
+    let chosen = if on {
+        if let Some(id) = &launch.restore {
+            old.iter().find(|(name, _)| name == id).cloned()
+        } else if launch.mode == super::entry::Mode::Default
+            && launch.path.is_none()
+            && !old.iter().any(|(_, record)| live(record))
+        {
+            old.first().cloned()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let restored = chosen.as_ref().map(|(id, record)| {
+        tracker.id = id.clone();
+        record.window.clone()
+    });
+    if on {
+        tracker.last = write(
+            &key,
+            &tracker.id,
+            &Record {
+                version: 1,
+                pid: std::process::id(),
+                born: current_born,
+                window: restored.clone().unwrap_or(initial),
+            },
+        )?;
+    }
+    let mut others = Vec::new();
+    for (id, mut record) in old {
+        if chosen.as_ref().is_some_and(|(name, _)| *name == id) || live(&record) {
+            continue;
+        }
+        if restored.is_some() && launch.restore.is_none() {
+            record.pid = std::process::id();
+            record.born = current_born;
+            write(&key, &id, &record)?;
+            others.push((id, record.window));
+        } else if launch.restore.is_none() {
+            remove(&key, &id)?;
         }
     }
-    if !restored && app.state.borrow().tabs[0].path() == ids::HOME {
-        let start = explicit.unwrap_or_else(ids::start_location);
-        app.state.borrow_mut().tabs[0] = Tab::new(&start);
-    }
-    TRACKER.with(|t| *t.borrow_mut() = Some(tracker));
-    checkpoint(app);
-    let weak = Rc::downgrade(app);
-    TIMER.with(|timer| {
-        timer.start(
-            slint::TimerMode::Repeated,
-            Duration::from_millis(500),
-            move || {
-                if let Some(app) = weak.upgrade() {
-                    checkpoint(&app);
-                }
-            },
-        )
-    });
+    Ok(Claim {
+        tracker,
+        restored,
+        others,
+    })
 }
-pub fn checkpoint(app: &App) {
-    let on = enabled();
-    TRACKER.with(|cell| {
-        let mut tracker = cell.borrow_mut();
-        let Some(t) = tracker.as_mut() else { return };
-        if t.registered != on {
+
+pub fn release_claim(id: &str) -> Result<(), String> {
+    let _lock = lock()?;
+    let key = session_key()?;
+    if let Some((_, mut record)) = records(&key).into_iter().find(|(name, _)| name == id) {
+        record.pid = 0;
+        record.born = 0;
+        write(&key, id, &record)?;
+    }
+    Ok(())
+}
+
+impl Tracker {
+    pub fn checkpoint(&mut self, window: Window) -> Result<(), String> {
+        let on = enabled();
+        if self.registered != on {
             unsafe {
                 if on {
-                    let command = crate::shell::wide(&format!("--restore-session {}", t.id));
-                    t.registered = RegisterApplicationRestart(
+                    let command = crate::shell::wide("");
+                    RegisterApplicationRestart(
                         PCWSTR(command.as_ptr()),
                         RESTART_NO_CRASH | RESTART_NO_HANG,
                     )
-                    .is_ok();
+                    .map_err(|error| error.to_string())?;
                 } else {
-                    let _ = UnregisterApplicationRestart();
-                    t.registered = false;
+                    UnregisterApplicationRestart().map_err(|error| error.to_string())?;
                 }
             }
+            self.registered = on;
         }
         if !on {
-            if !t.last.is_empty() {
-                if let Ok(key) =
-                    RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(ROOT, KEY_WRITE)
-                {
-                    let _ = key.delete_value(&t.id);
-                }
-                t.last.clear();
+            if !self.last.is_empty() {
+                let _lock = lock()?;
+                remove(&session_key()?, &self.id)?;
+                self.last.clear();
             }
-            return;
+            return Ok(());
         }
         let record = Record {
             version: 1,
             pid: std::process::id(),
-            born: t.born,
-            window: snapshot(app),
+            born: self.born,
+            window,
         };
-        let Ok(text) = serde_json::to_string(&record) else {
-            return;
-        };
-        if text == t.last {
-            return;
+        let text = serde_json::to_string(&record).map_err(|error| error.to_string())?;
+        if text == self.last {
+            return Ok(());
         }
-        let Some(_lock) = Lock::acquire() else { return };
-        if let Ok((key, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(ROOT) {
-            if key.set_value(&t.id, &text).is_ok() {
-                t.last = text;
-            }
-        }
-    });
-}
-pub fn ending(app: &App, confirmed: bool) {
-    checkpoint(app);
-    if confirmed {
-        TRACKER.with(|t| {
-            if let Some(t) = t.borrow_mut().as_mut() {
-                t.ending = true;
-            }
-        });
+        let _lock = lock()?;
+        session_key()?
+            .set_value(&self.id, &text)
+            .map_err(|error| error.to_string())?;
+        self.last = text;
+        Ok(())
     }
-}
-pub fn finish(app: &App) {
-    TIMER.with(|t| t.stop());
-    checkpoint(app);
-    TRACKER.with(|cell| {
-        let tracker = cell.borrow();
-        let Some(t) = tracker.as_ref() else { return };
-        if !enabled() || t.ending {
-            return;
+
+    pub fn ending(&mut self) {
+        self.ending = true;
+    }
+
+    pub fn finish(&mut self, window: Window) -> Result<(), String> {
+        self.checkpoint(window)?;
+        if !enabled() || self.ending {
+            return Ok(());
         }
-        let Some(_lock) = Lock::acquire() else { return };
-        if let Ok(key) =
-            RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(ROOT, KEY_READ | KEY_WRITE)
+        let _lock = lock()?;
+        let key = session_key()?;
+        if records(&key)
+            .iter()
+            .any(|(id, record)| *id != self.id && live(record))
         {
-            // Closing one window intentionally removes it; closing the last retains
-            // its tabs for the user-requested app-reopen behavior.
-            if records(&key)
-                .iter()
-                .any(|(id, r)| *id != t.id && r.pid != std::process::id() && live(r))
-            {
-                let _ = key.delete_value(&t.id);
-            }
+            remove(&key, &self.id)?;
         }
-    });
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::ids;
     fn record() -> Record {
         Record {
             version: 1,

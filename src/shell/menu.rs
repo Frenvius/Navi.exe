@@ -1,5 +1,3 @@
-//! The classic shell context menu ("Mostrar mais opções"), tracked natively on the main window.
-
 use std::cell::RefCell;
 
 use windows::core::{Interface, PSTR};
@@ -124,21 +122,6 @@ pub fn commands(hwnd: HWND, folder: &str, paths: &[String]) -> Vec<Command> {
     }
 }
 
-/// Shows the menu at a client point (physical pixels). Returns the canonical verb that was
-/// picked, if any. "rename" is not invoked; the caller starts in-place editing instead.
-pub fn show(
-    hwnd: HWND,
-    folder: &str,
-    paths: &[String],
-    x: i32,
-    y: i32,
-    shift: bool,
-) -> Result<Option<String>, String> {
-    show_impl(hwnd, folder, paths, x, y, shift, false)
-}
-
-/// Network computers use the native classic menu directly on this Explorer build.
-/// Explorer contributes the two browser commands; handle those inside this app.
 pub fn show_network(
     hwnd: HWND,
     folder: &str,
@@ -147,8 +130,24 @@ pub fn show_network(
     y: i32,
     shift: bool,
 ) -> Result<Option<String>, String> {
-    show_impl(hwnd, folder, paths, x, y, shift, true)
+    show_impl(hwnd, folder, paths, x, y, shift, Host::Network)
 }
+enum Host {
+    Browser,
+    Network,
+}
+
+pub fn show_browser(
+    hwnd: HWND,
+    folder: &str,
+    paths: &[String],
+    x: i32,
+    y: i32,
+    shift: bool,
+) -> Result<Option<String>, String> {
+    show_impl(hwnd, folder, paths, x, y, shift, Host::Browser)
+}
+
 fn show_impl(
     hwnd: HWND,
     folder: &str,
@@ -156,9 +155,18 @@ fn show_impl(
     x: i32,
     y: i32,
     shift: bool,
-    network: bool,
+    host: Host,
 ) -> Result<Option<String>, String> {
     com_init();
+    let network = matches!(host, Host::Network);
+    let browser = network
+        || (matches!(host, Host::Browser)
+            && !paths.is_empty()
+            && paths.iter().all(|path| {
+                super::Pidl::parse(path)
+                    .and_then(|pidl| pidl.folder())
+                    .is_ok()
+            }));
     unsafe {
         let cm = ops::context_menu(hwnd, folder, paths)?;
         let menu = CreatePopupMenu().map_err(|e| e.message())?;
@@ -170,7 +178,7 @@ fn show_impl(
 
         const NEW_TAB: i32 = 0x8001;
         const NEW_WINDOW: i32 = 0x8002;
-        if network {
+        if browser {
             use windows::core::PCWSTR;
             use windows::Win32::UI::WindowsAndMessaging::{InsertMenuW, MF_STRING};
             let native = (0..GetMenuItemCount(Some(menu)).max(0))
@@ -218,15 +226,16 @@ fn show_impl(
         .0;
         let _ = RemoveWindowSubclass(hwnd, Some(forward), 1);
 
-        let result = if network && cmd == NEW_TAB {
+        let result = if browser && cmd == NEW_TAB {
             Ok(Some("opennewtab".into()))
-        } else if network && cmd == NEW_WINDOW {
+        } else if browser && cmd == NEW_WINDOW {
             Ok(Some("opennewwindow".into()))
         } else if cmd > 0 {
             let id = (cmd - 1) as usize;
             let verb = verb_of(&cm, id);
             if verb == "rename"
-                || (network && matches!(verb.as_str(), "open" | "opennewtab" | "opennewwindow"))
+                || (network && verb == "open")
+                || matches!(verb.as_str(), "opennewtab" | "opennewwindow")
             {
                 Ok(Some(verb))
             } else {
