@@ -614,8 +614,15 @@ pub fn new_folder(folder: &str) -> Result<String, String> {
 
 pub fn can_paste() -> bool {
     unsafe {
-        let idlist = RegisterClipboardFormatW(windows::core::w!("Shell IDList Array"));
-        IsClipboardFormatAvailable(CF_HDROP).is_ok() || IsClipboardFormatAvailable(idlist).is_ok()
+        let registered = [
+            windows::core::w!("Shell IDList Array"),
+            windows::core::w!("FileGroupDescriptorW"),
+            windows::core::w!("FileGroupDescriptor"),
+        ];
+        IsClipboardFormatAvailable(CF_HDROP).is_ok()
+            || registered
+                .into_iter()
+                .any(|name| IsClipboardFormatAvailable(RegisterClipboardFormatW(name)).is_ok())
     }
 }
 
