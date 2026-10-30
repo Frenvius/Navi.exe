@@ -480,7 +480,6 @@ impl IDropTarget_Impl for WindowDropTarget_Impl {
     }
 }
 
-
 pub fn register(hwnd: HWND, resolver: Box<dyn Resolver>) -> Result<()> {
     let helper: Option<IDropTargetHelper> =
         match unsafe { CoCreateInstance(&CLSID_DragDropHelper, None, CLSCTX_INPROC_SERVER) } {

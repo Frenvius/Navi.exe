@@ -2082,7 +2082,9 @@ impl RowIcons {
         if let Some(&icon) = self.resolved.get(path) {
             return icon;
         }
-        let icon = self.icon_in_parent(path).unwrap_or_else(|| shell::icons::file_icon(path));
+        let icon = self
+            .icon_in_parent(path)
+            .unwrap_or_else(|| shell::icons::file_icon(path));
         self.resolved.insert(path.to_owned(), icon);
         icon
     }
@@ -2091,7 +2093,11 @@ impl RowIcons {
         let file = std::path::Path::new(path);
         let parent = file.parent()?.to_str()?;
         let name = file.file_name()?.to_str()?;
-        if self.parent.as_ref().is_none_or(|(bound, _)| bound != parent) {
+        if self
+            .parent
+            .as_ref()
+            .is_none_or(|(bound, _)| bound != parent)
+        {
             shell::com_init();
             let folder = shell::Pidl::parse(parent).ok()?.folder().ok()?;
             self.parent = Some((parent.to_owned(), folder));
@@ -2859,10 +2865,8 @@ mod tests {
         let pidl = shell::Pidl::parse(&entry.path).unwrap();
         let parent = pidl.parent().unwrap().folder().unwrap();
         let provider: IShellIcon = parent.cast().unwrap();
-        let checked = unsafe {
-            provider.GetIconOf(pidl.last_id(), GIL_FORSHELL | GIL_CHECKSHIELD)
-        }
-        .unwrap();
+        let checked =
+            unsafe { provider.GetIconOf(pidl.last_id(), GIL_FORSHELL | GIL_CHECKSHIELD) }.unwrap();
         let unchecked = unsafe { provider.GetIconOf(pidl.last_id(), GIL_FORSHELL) }.unwrap();
         assert_ne!(checked, unchecked, "Shell did not supply the UAC variant");
         let shield = shell::icons::icon(checked as u32, 16).unwrap();

@@ -11,7 +11,11 @@ const ACTIVATE: usize = 81;
 pub fn activated(hwnd: HWND) {
     let time = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() };
     if let Err(error) = unsafe {
-        SetPropW(hwnd, w!("NaviLastActivated"), Some(HANDLE(time.max(1) as _)))
+        SetPropW(
+            hwnd,
+            w!("NaviLastActivated"),
+            Some(HANDLE(time.max(1) as _)),
+        )
     } {
         eprintln!("launch activation order: {error}");
     }
@@ -84,8 +88,7 @@ pub fn message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Opti
 }
 
 fn activate_once(hwnd: HWND) -> bool {
-    if unsafe { GetPropW(hwnd, w!("NaviMain")) }.0 as usize
-        != crate::app::tab_transfer::MARKER
+    if unsafe { GetPropW(hwnd, w!("NaviMain")) }.0 as usize != crate::app::tab_transfer::MARKER
         || !crate::app::tab_transfer::same_executable(hwnd)
     {
         return true;

@@ -57,15 +57,68 @@ pub fn backdrop(
             .round()
             .max(0.0) as usize;
         let source = (y.min(height - 1) * width + x.min(width - 1)) * 3;
-        for channel in 0..3 {
-            pixel[channel] = ((pixel[channel] as u32 * alpha
+        let behind: [f32; 3] = std::array::from_fn(|channel| backdrop[source + channel] as f32);
+        let mixed: [f32; 3] = std::array::from_fn(|channel| {
+            ((pixel[channel] as u32 * alpha
                 + backdrop[source + channel] as u32 * (255 - alpha)
                 + 127)
                 / 255
                 + u32::from(dark))
-            .min(255) as u8;
-        }
+            .min(255) as f32
+        });
+        let tint_opacity = if dark {
+            DARK_TINT_OPACITY
+        } else {
+            LIGHT_TINT_OPACITY
+        };
+        let color = with_chroma(mixed, behind, alpha as f32 / 255.0 - tint_opacity);
+        pixel[..3].copy_from_slice(&color);
         pixel[3] = 255;
     }
     Ok(())
+}
+
+const DARK_TINT_OPACITY: f32 = 0.15;
+const LIGHT_TINT_OPACITY: f32 = 0.0;
+
+fn luminance(color: [f32; 3]) -> f32 {
+    0.3 * color[0] + 0.59 * color[1] + 0.11 * color[2]
+}
+
+fn with_chroma(base: [f32; 3], behind: [f32; 3], amount: f32) -> [u8; 3] {
+    let gray = luminance(behind);
+    let color: [f32; 3] =
+        std::array::from_fn(|channel| base[channel] + amount * (behind[channel] - gray));
+    let level = luminance(color);
+    let low = color.iter().copied().fold(f32::MAX, f32::min);
+    let high = color.iter().copied().fold(f32::MIN, f32::max);
+    let mut scale: f32 = 1.0;
+    if low < 0.0 {
+        scale = scale.min(level / (level - low));
+    }
+    if high > 255.0 {
+        scale = scale.min((255.0 - level) / (high - level));
+    }
+    color.map(|value| (level + (value - level) * scale).round().clamp(0.0, 255.0) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn chroma_keeps_luminance_and_gray_backdrops_unchanged() {
+        assert_eq!(
+            super::with_chroma([44.0; 3], [200.0; 3], 0.81),
+            [44, 44, 44]
+        );
+        let tinted = super::with_chroma([44.0; 3], [120.0, 40.0, 130.0], 0.81);
+        let level = super::luminance(tinted.map(f32::from));
+        assert!((level - 44.0).abs() < 1.0, "{tinted:?}");
+        assert!(tinted[0] > tinted[1] && tinted[2] > tinted[1]);
+    }
+
+    #[test]
+    fn chroma_is_clipped_toward_luminance() {
+        let clipped = super::with_chroma([250.0; 3], [255.0, 0.0, 0.0], 1.0);
+        assert!((super::luminance(clipped.map(f32::from)) - 250.0).abs() < 1.5);
+    }
 }

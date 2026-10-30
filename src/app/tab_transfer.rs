@@ -12,8 +12,7 @@ pub fn install(hwnd: HWND) {
 }
 
 pub(crate) fn peer(hwnd: HWND) -> bool {
-    (unsafe { GetPropW(hwnd, w!("NaviMain")).0 as usize == MARKER })
-        && same_executable(hwnd)
+    (unsafe { GetPropW(hwnd, w!("NaviMain")).0 as usize == MARKER }) && same_executable(hwnd)
 }
 pub fn same_executable(hwnd: HWND) -> bool {
     use windows::Win32::System::Threading::{

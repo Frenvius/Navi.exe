@@ -486,11 +486,7 @@ mod tests {
         }
         let before = reg.values.clone();
         let keys = reg.keys.clone();
-        let b = snapshot(
-            &reg,
-            Path::new(r"C:\Program Files\Navi\navi.exe"),
-        )
-        .unwrap();
+        let b = snapshot(&reg, Path::new(r"C:\Program Files\Navi\navi.exe")).unwrap();
         let b: Backup = serde_json::from_slice(&serde_json::to_vec(&b).unwrap()).unwrap();
         apply(&mut reg, &b).unwrap();
         restore(&mut reg, &b).unwrap();

@@ -115,7 +115,11 @@ impl Items {
                     return Some(item);
                 }
             }
-            if let Some(item) = self.folder.as_ref().and_then(|folder| child_item(folder, path)) {
+            if let Some(item) = self
+                .folder
+                .as_ref()
+                .and_then(|folder| child_item(folder, path))
+            {
                 return Some(item);
             }
             if let Some(item) = self.directory_item(path) {

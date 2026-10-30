@@ -546,7 +546,11 @@ pub fn draw_rows(
                 .and_then(|ready| ready.cells.get(i))
                 .map(|value| std::borrow::Cow::Borrowed(value.as_str()))
                 .unwrap_or_else(|| {
-                    std::borrow::Cow::Owned(crate::app::columns::cell_text(entry, &column.key, None))
+                    std::borrow::Cow::Owned(crate::app::columns::cell_text(
+                        entry,
+                        &column.key,
+                        None,
+                    ))
                 });
             let value = value.as_ref();
             let padding = if column.right {

@@ -382,11 +382,7 @@ fn dispatch(launch: &Launch) -> bool {
             return false;
         };
         let _owned = Requester(source);
-        let _ = SetPropW(
-            source,
-            w!("NaviLaunch"),
-            Some(HANDLE(LAUNCH_MARK as _)),
-        );
+        let _ = SetPropW(source, w!("NaviLaunch"), Some(HANDLE(LAUNCH_MARK as _)));
         let path = launch.path.clone().unwrap_or_else(ids::start_location);
         let send = |target: HWND, action: Action| {
             let probe = matches!(action, Action::Probe);
@@ -582,7 +578,10 @@ mod tests {
         .unwrap();
         assert_eq!(selected.delivery_mode(Preferences::default()), Mode::NewTab);
         assert_eq!(selected.path.as_deref(), Some(r"C:\Users\José"));
-        assert_eq!(selected.select.as_deref(), Some(r"C:\Users\José\selected.txt"));
+        assert_eq!(
+            selected.select.as_deref(),
+            Some(r"C:\Users\José\selected.txt")
+        );
     }
     #[test]
     fn folder_launch_modes_root_selection_and_native_legacy_forms() {
@@ -660,9 +659,7 @@ pub(crate) fn incoming(msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<Resul
 }
 
 pub fn ready_window(hwnd: HWND) {
-    if let Err(error) =
-        unsafe { SetPropW(hwnd, w!("NaviLaunchReady"), Some(HANDLE(1 as _))) }
-    {
+    if let Err(error) = unsafe { SetPropW(hwnd, w!("NaviLaunchReady"), Some(HANDLE(1 as _))) } {
         eprintln!("launch readiness: {error}");
     }
     STARTUP.with(|guard| guard.borrow_mut().take());
