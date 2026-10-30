@@ -2105,6 +2105,165 @@ fn row_icon(entry: &ShellEntry, images: &mut HashMap<u32, Arc<Rgba>>) -> (u32, O
 
 #[cfg(test)]
 mod tests {
+    fn list_for_folder(
+        folder: super::Folder,
+        updates: std::sync::mpsc::Receiver<super::Update>,
+        requests: std::sync::mpsc::Sender<super::Request>,
+    ) -> super::List {
+        super::List {
+            _alive: std::sync::Arc::new(()),
+            navigation_width: 202.0,
+            header: Default::default(),
+            interaction: Default::default(),
+            folder: Some(std::sync::Arc::new(folder)),
+            rows: Default::default(),
+            cut: Default::default(),
+            search: Default::default(),
+            pane_model: None,
+            enumerations: 1,
+            entry_reads: 0,
+            dirty: false,
+            layout_changed: false,
+            pending_selection: None,
+            filter_menu: None,
+            requested_filter: None,
+            pending: Default::default(),
+            updates,
+            requests,
+            needed: 0..0,
+            generation: 0,
+            change: super::ViewChange::Stable,
+            grid_request: None,
+        }
+    }
+
+    #[test]
+    fn large_folder_draws_visible_names_without_worker_rows_or_grid_labels() {
+        use super::super::{details, grid, render, text, theme};
+        use super::*;
+        let mut folder = load(concat!(env!("CARGO_MANIFEST_DIR"), "\\src\\ui"), None).unwrap();
+        let entry = folder.entries[0].clone();
+        folder.entries = Arc::new(
+            (0..5019)
+                .map(|index| {
+                    let mut entry = entry.clone();
+                    entry.name = format!("Visible item {index:05}");
+                    entry.path = format!("C:\\Visible item {index:05}");
+                    entry
+                })
+                .collect(),
+        );
+        folder.order = Arc::new((0..5019).collect());
+        folder.headers = Arc::new(Vec::new());
+        folder.collapsed.clear();
+        folder.view.group = None;
+        folder.settings.compact = true;
+        folder.settings.check_boxes = false;
+        folder.settings.single_click = false;
+        folder.columns = columns::shown_columns(vec![(
+            windows::Win32::Storage::EnhancedStorage::PKEY_ItemNameDisplay,
+            300.0,
+        )]);
+        folder.rebuild_layout();
+        let (_sender, updates) = mpsc::channel();
+        let (requests, _receiver) = mpsc::channel();
+        let mut list = list_for_folder(folder, updates, requests);
+        let renderer = render::Renderer::new().unwrap();
+        let mut text = text::TextEngine::new(96).unwrap();
+        let mut theme = theme::Theme::system();
+        theme.content = windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+            r: 25.0 / 255.0,
+            g: 25.0 / 255.0,
+            b: 25.0 / 255.0,
+            a: 1.0,
+        };
+        theme.dui_text = windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        for (mode, size) in [
+            (6, 16),
+            (1, 256),
+            (2, 96),
+            (3, 48),
+            (4, 16),
+            (5, 16),
+            (7, 48),
+            (8, 32),
+        ] {
+            let folder = Arc::make_mut(list.folder.as_mut().unwrap());
+            folder.view.mode = mode;
+            folder.view.icon_size = size;
+            folder.grid = grid::Model::new(folder, (596.0, 559.0)).map(|mut model| {
+                model.labels.fill(None);
+                Arc::new(model)
+            });
+            let view = details::Viewport::new((1100.0, 719.0), folder, 202.0);
+            for end in [false, true] {
+                let x = if end { view.maximum_x() } else { 0.0 };
+                let y = if end { view.maximum_y() } else { 0.0 };
+                let folder = list.folder.as_ref().unwrap();
+                let pixels = render::test_pixels(
+                    &renderer.canvas,
+                    (view.right as u32, view.rows_height as u32),
+                    || {
+                        let mut original = Default::default();
+                        unsafe {
+                            renderer.canvas.context.GetTransform(&mut original);
+                        }
+                        let mut transform = original;
+                        transform.M31 = -x;
+                        transform.M32 = -y;
+                        unsafe {
+                            renderer.canvas.context.SetTransform(&transform);
+                        }
+                        let result = if folder.grid.is_some() {
+                            grid::draw(
+                                &list,
+                                &mut Default::default(),
+                                &renderer.canvas,
+                                &mut text,
+                                &theme,
+                                view,
+                                windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F {
+                                    left: x,
+                                    top: y,
+                                    right: x + view.right,
+                                    bottom: y + view.rows_height,
+                                },
+                            )
+                        } else {
+                            details::draw_rows(
+                                &list,
+                                &mut Default::default(),
+                                &renderer.canvas,
+                                &mut text,
+                                &theme,
+                                view,
+                                folder.layout.visible(y, view.rows_height, view.plate),
+                            )
+                        };
+                        unsafe {
+                            renderer.canvas.context.SetTransform(&original);
+                        }
+                        result
+                    },
+                )
+                .unwrap();
+                assert!(
+                    pixels
+                        .chunks_exact(3)
+                        .filter(|pixel| pixel.iter().all(|&channel| channel > 95))
+                        .count()
+                        > 100,
+                    "mode {mode}, end {end} rendered no visible names"
+                );
+            }
+        }
+    }
+
     #[test]
     fn column_filter_uses_all_entries_and_clears_a_resumed_filtered_view() {
         use super::{sort, List, Worker, HWND};
@@ -2231,31 +2390,8 @@ mod tests {
         expanded.rebuild_layout();
         let (sender, updates) = mpsc::channel();
         let (requests, _receiver) = mpsc::channel();
-        let mut list = List {
-            _alive: Arc::new(()),
-            navigation_width: 202.0,
-            header: Default::default(),
-            interaction: Default::default(),
-            folder: Some(Arc::new(original)),
-            rows: HashMap::new(),
-            cut: HashSet::new(),
-            search: Default::default(),
-            pane_model: None,
-            enumerations: 1,
-            entry_reads: 0,
-            dirty: false,
-            layout_changed: false,
-            pending_selection: None,
-            filter_menu: None,
-            requested_filter: None,
-            pending: HashSet::new(),
-            updates,
-            requests,
-            needed: 0..8,
-            generation: 0,
-            change: ViewChange::Stable,
-            grid_request: None,
-        };
+        let mut list = list_for_folder(original, updates, requests);
+        list.needed = 0..8;
         let mut scroll = super::super::scroll::State::default();
         sender
             .send(Update::SearchBatch(0, Arc::new(expanded.clone()), (1, 0)))
@@ -2665,38 +2801,43 @@ mod tests {
             .into_iter()
             .find(|e| e.name.eq_ignore_ascii_case("ComputerDefaults.exe"))
             .unwrap();
-        let expected = include_bytes!("../../tests/fixtures/computer-defaults-icon.rgb");
         let resolved = shell::icons::file_icon(&entry.path);
-        for deferred in [false, true] {
-            entry.icon_pending = deferred;
-            entry.icon = if deferred {
-                shell::icons::generic_icon(&entry.path)
-            } else {
-                resolved
-            };
-            let (_, image) = row_icon(&entry, &mut HashMap::new());
-            let image = image.unwrap();
-            assert_eq!((image.width, image.height), (16, 16));
-            let pixels = image
+        entry.icon_pending = false;
+        entry.icon = resolved;
+        let (_, immediate) = row_icon(&entry, &mut HashMap::new());
+        let immediate = immediate.unwrap();
+        entry.icon_pending = true;
+        entry.icon = shell::icons::generic_icon(&entry.path);
+        let (_, deferred) = row_icon(&entry, &mut HashMap::new());
+        let deferred = deferred.unwrap();
+        assert_eq!((immediate.width, immediate.height), (16, 16));
+        assert_eq!((deferred.width, deferred.height), (16, 16));
+        assert_eq!(immediate.pixels.len(), 16 * 16 * 4);
+        assert_eq!(immediate.pixels, deferred.pixels);
+        use windows::core::Interface;
+        use windows::Win32::UI::Shell::IShellIcon;
+        const GIL_FORSHELL: u32 = 0x0002;
+        const GIL_CHECKSHIELD: u32 = 0x0200;
+        let pidl = shell::Pidl::parse(&entry.path).unwrap();
+        let parent = pidl.parent().unwrap().folder().unwrap();
+        let provider: IShellIcon = parent.cast().unwrap();
+        let checked = unsafe {
+            provider.GetIconOf(pidl.last_id(), GIL_FORSHELL | GIL_CHECKSHIELD)
+        }
+        .unwrap();
+        let unchecked = unsafe { provider.GetIconOf(pidl.last_id(), GIL_FORSHELL) }.unwrap();
+        assert_ne!(checked, unchecked, "Shell did not supply the UAC variant");
+        let shield = shell::icons::icon(checked as u32, 16).unwrap();
+        let unshielded = shell::icons::icon(unchecked as u32, 16).unwrap();
+        assert_eq!(immediate.pixels, shield.pixels);
+        assert!(
+            immediate
                 .pixels
                 .chunks_exact(4)
-                .flat_map(|rgba| {
-                    let alpha = rgba[3] as u32;
-                    [0, 1, 2].map(|channel| {
-                        ((rgba[channel] as u32 * alpha + 254) / 255
-                            + ((25 * (255 - alpha) + 127) / 255))
-                            .min(255) as u8
-                    })
-                })
-                .collect::<Vec<_>>();
-            assert!(
-                pixels
-                    .iter()
-                    .zip(expected)
-                    .all(|(actual, expected)| actual.abs_diff(*expected) <= 1),
-                "elevated icon differs from Explorer"
-            );
-        }
+                .zip(unshielded.pixels.chunks_exact(4))
+                .any(|(checked, unchecked)| checked[3] != 0 && checked != unchecked),
+            "UAC shield is absent"
+        );
     }
 
     #[test]

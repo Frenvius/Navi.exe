@@ -459,27 +459,30 @@ pub fn draw_rows(
     for row in range.clone().filter(|&row| !folder.layout.folded[row]) {
         draw_plate(list, assets, canvas, theme, viewport, row)?;
     }
-    for row in range.filter(|&row| !folder.layout.folded[row]) {
+    for row in range.clone().filter(|&row| !folder.layout.folded[row]) {
         let y = viewport.row_top(folder, row);
         let lower = if folder.settings.compact { 0.0 } else { 2.0 };
-        let Some(ready) = list.rows.get(&row) else {
-            continue;
-        };
+        let ready = list.rows.get(&row);
         let shift = if folder.settings.check_boxes {
             15.0
         } else {
             0.0
         };
         let entry = &folder.entries[folder.order[row]];
-        if let Some(image) = &ready.image {
-            let bitmap = match assets.images.get(&ready.icon) {
+        let icon = ready.map_or(entry.icon, |ready| ready.icon);
+        let bitmap = if let Some(image) = ready.and_then(|ready| ready.image.as_ref()) {
+            Some(match assets.images.get(&icon) {
                 Some(bitmap) => bitmap.clone(),
                 None => {
                     let bitmap = canvas.shared_icon(image)?;
-                    assets.images.insert(ready.icon, bitmap.clone());
+                    assets.images.insert(icon, bitmap.clone());
                     bitmap
                 }
-            };
+            })
+        } else {
+            assets.images.get(&icon).cloned()
+        };
+        if let Some(bitmap) = bitmap {
             unsafe {
                 canvas.context.DrawBitmap(
                     bitmap.as_ref(),
@@ -539,7 +542,13 @@ pub fn draw_rows(
             } else {
                 &theme.cell_text
             };
-            let value = &ready.cells[i];
+            let value = ready
+                .and_then(|ready| ready.cells.get(i))
+                .map(|value| std::borrow::Cow::Borrowed(value.as_str()))
+                .unwrap_or_else(|| {
+                    std::borrow::Cow::Owned(crate::app::columns::cell_text(entry, &column.key, None))
+                });
+            let value = value.as_ref();
             let padding = if column.right {
                 8.0
             } else if column.key
@@ -614,7 +623,12 @@ pub fn draw_rows(
             }
         }
     }
-    let used: std::collections::HashSet<_> = list.rows.values().map(|r| r.icon).collect();
+    let used: std::collections::HashSet<_> = list
+        .rows
+        .values()
+        .map(|r| r.icon)
+        .chain(range.map(|row| folder.entries[folder.order[row]].icon))
+        .collect();
     assets.images.retain(|key, _| used.contains(key));
     Ok(())
 }

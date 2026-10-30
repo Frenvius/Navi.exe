@@ -800,32 +800,40 @@ pub fn draw(
         }
         match model.spec.kind {
             0 => {
-                if let Some(label) = model.labels.get(row).and_then(Option::as_ref) {
-                    for (line, value) in label.collapsed.lines().enumerate() {
-                        let advance = text.layout(value, super::text::DIRECTUI, 4096.0)?.width;
-                        let room = if label.width >= 4 {
-                            (label.width - 4) as f32
-                        } else {
-                            width - 12.0
-                        };
-                        let left = x + grid_layout::label_x(width, label.width, room);
-                        let top = y + model.spec.icon + 2.0 + line as f32 * 15.0;
-                        let height = text.layout(value, DIRECTUI_KERNED, 4096.0)?.height;
-                        details::draw_line(
-                            canvas,
-                            text,
-                            value,
-                            DIRECTUI_KERNED,
-                            D2D_RECT_F {
-                                left,
-                                top,
-                                right: left + room,
-                                bottom: top + height,
-                            },
-                            ((room - advance) / 2.0).floor(),
-                            &color,
-                        )?;
-                    }
+                let fallback;
+                let label = if let Some(label) = model.labels.get(row).and_then(Option::as_ref) {
+                    label.as_ref()
+                } else {
+                    fallback = crate::shell::text::icon_label(
+                        &entry.name,
+                        grid_layout::label_key(&model.spec) as i32,
+                    );
+                    &fallback
+                };
+                for (line, value) in label.collapsed.lines().enumerate() {
+                    let advance = text.layout(value, super::text::DIRECTUI, 4096.0)?.width;
+                    let room = if label.width >= 4 {
+                        (label.width - 4) as f32
+                    } else {
+                        width - 12.0
+                    };
+                    let left = x + grid_layout::label_x(width, label.width, room);
+                    let top = y + model.spec.icon + 2.0 + line as f32 * 15.0;
+                    let height = text.layout(value, DIRECTUI_KERNED, 4096.0)?.height;
+                    details::draw_line(
+                        canvas,
+                        text,
+                        value,
+                        DIRECTUI_KERNED,
+                        D2D_RECT_F {
+                            left,
+                            top,
+                            right: left + room,
+                            bottom: top + height,
+                        },
+                        ((room - advance) / 2.0).floor(),
+                        &color,
+                    )?;
                 }
             }
             1 => {
