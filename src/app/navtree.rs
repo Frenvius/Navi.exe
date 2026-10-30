@@ -8,23 +8,23 @@ const CLSID_THIS_PC: &str = "20D04FE0-3AEA-1069";
 const CLSID_LIBRARIES: &str = "031E4825-7B94-4DC3";
 const CLSID_NETWORK: &str = "F02C1A0D-BE21-4350";
 
-/// Explorer groups the namespace roots as: Home, Gallery and cloud drives / pinned folders /
-/// This PC, Network and every other root (WSL, removable drives...).
 fn rank(node: &NavNode) -> u8 {
     let id = node.id.to_uppercase();
     if id.contains(CLSID_HOME) {
         0
     } else if id.contains(CLSID_GALLERY) {
         1
-    } else if id.contains(CLSID_ONEDRIVE) || (node.is_fs && !ids::is_drive_root(&node.id)) {
+    } else if id.contains(CLSID_ONEDRIVE) || (node.is_fs && node.id.is_empty()) {
         2
+    } else if node.is_fs && !ids::is_drive_root(&node.id) {
+        4
     } else if id.contains(CLSID_THIS_PC) {
         5
-    } else if id.contains(CLSID_LIBRARIES) {
-        6
-    } else if id.contains(CLSID_NETWORK) {
-        7
     } else if ids::is_drive_root(&node.id) {
+        6
+    } else if id.contains(CLSID_LIBRARIES) {
+        7
+    } else if id.contains(CLSID_NETWORK) {
         8
     } else {
         9
@@ -469,6 +469,25 @@ mod tests {
             })
             .collect();
         assert_eq!(names, vec!["", ids::HOME, "c:\\known", ids::NETWORK]);
+    }
+
+    #[test]
+    fn only_onedrive_joins_home_while_other_folder_roots_precede_this_pc() {
+        let mut dropbox = node("C:\\Users\\A\\Dropbox");
+        dropbox.is_fs = true;
+        let mut onedrive = node("");
+        onedrive.is_fs = true;
+        assert_eq!(rank(&onedrive), 2);
+        assert_eq!(rank(&dropbox), 4);
+        assert!(rank(&dropbox) < rank(&node(ids::THIS_PC)));
+    }
+
+    #[test]
+    fn drive_roots_follow_this_pc_before_network() {
+        let mut drive = node("E:\\");
+        drive.is_fs = true;
+        let order = [node(ids::THIS_PC), drive, node(ids::NETWORK)].map(|n| rank(&n));
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
