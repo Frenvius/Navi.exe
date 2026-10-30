@@ -22,6 +22,15 @@ pub struct Hit {
     pub part: Part,
 }
 
+const ARROW: f32 = 17.0;
+const OVERLAY_ARROW: f32 = 16.0;
+const OVERLAY_THUMB_SPAN: f32 = 26.0;
+const OVERLAY_THUMB_INSET: f32 = 6.0;
+const OVERLAY_HIDE_INSIDE: u32 = 3200;
+const OVERLAY_HIDE_OUTSIDE: u32 = 2000;
+const OVERLAY_FADE: std::time::Duration = std::time::Duration::from_millis(80);
+pub const OVERLAY_WIDTH: f32 = 13.0;
+
 #[derive(Clone, Copy)]
 pub struct Bar {
     pub axis: Axis,
@@ -29,16 +38,26 @@ pub struct Bar {
     pub maximum: f32,
     pub thumb_size: f32,
     pub thumb_pos: f32,
+    pub overlay: bool,
 }
 
 impl Bar {
-    pub fn travel(&self) -> f32 {
-        (self.length - 34.0 - self.thumb_size).max(0.0)
+    fn arrow(&self) -> f32 {
+        if self.overlay {
+            OVERLAY_ARROW
+        } else {
+            ARROW
+        }
     }
+
+    pub fn travel(&self) -> f32 {
+        (self.length - 2.0 * self.arrow() - self.thumb_size).max(0.0)
+    }
+
     pub fn hit(&self, position: f32) -> Hit {
-        let part = if position < 17.0 {
+        let part = if position < self.arrow() {
             Part::Start
-        } else if position >= self.length - 17.0 {
+        } else if position >= self.length - self.arrow() {
             Part::End
         } else if position < self.thumb_pos {
             Part::Before
@@ -68,6 +87,10 @@ pub struct State {
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
     pub repeating: bool,
+    pub revealed: bool,
+    inside: bool,
+    hide_delay: Option<u32>,
+    fading: Option<std::time::Instant>,
     remainder: i32,
     pointer: (f32, f32),
     drag: Option<Drag>,
@@ -78,7 +101,7 @@ pub struct State {
     grid: Option<std::sync::Arc<super::grid::Model>>,
     columns: Vec<f32>,
     unit_starts: Vec<f32>,
-    pub gallery_motion: Option<(f32, f32, std::time::Instant)>,
+    pub wheel_motion: Option<(f32, f32, std::time::Instant)>,
 }
 
 impl State {
@@ -87,10 +110,15 @@ impl State {
             self.grid = None;
             self.columns = Vec::new();
             self.unit_starts = Vec::new();
-            self.gallery_motion = None;
+            self.wheel_motion = None;
             self.layout(view, &folder.layout);
             return;
         };
+        if self.grid.as_ref().is_none_or(|old| old.kind != model.kind) {
+            self.revealed = false;
+            self.inside = false;
+            self.fading = None;
+        }
         let cold = self.grid.as_ref().is_none_or(|old| {
             old.layout_id != model.layout_id
                 || old.kind != model.kind
@@ -130,7 +158,7 @@ impl State {
         self.view = Some(view);
         self.x = self.x.clamp(0.0, view.maximum_x()).round();
         self.y = self.y.clamp(0.0, view.maximum_y());
-        if self.gallery_motion.is_none() {
+        if self.wheel_motion.is_none() {
             self.y = self.y.round();
         }
         if !self.unit_starts.is_empty() {
@@ -143,14 +171,14 @@ impl State {
         }
     }
 
-    pub fn animate_gallery(&mut self) -> bool {
-        let Some((from, to, start)) = self.gallery_motion else {
+    pub fn animate_wheel(&mut self) -> bool {
+        let Some((from, to, start)) = self.wheel_motion else {
             return false;
         };
         let (value, done) = crate::app::gallery::animated_offset(from, to, start.elapsed());
         self.y = value;
         if done {
-            self.gallery_motion = None;
+            self.wheel_motion = None;
         }
         true
     }
@@ -181,8 +209,34 @@ impl State {
         }
     }
 
+    fn overlay_bar(&self, view: Viewport) -> Option<Bar> {
+        let length = view.bottom;
+        let track = length - 2.0 * OVERLAY_ARROW;
+        if !(view.overlay && self.revealed) || track <= ARROW {
+            return None;
+        }
+        let maximum = view.maximum_y();
+        let thumb_size = ((length - OVERLAY_THUMB_SPAN) * view.rows_height
+            / view.extent_y.max(1.0)
+            - OVERLAY_THUMB_INSET)
+            .round()
+            .clamp(ARROW, track);
+        let ratio = if maximum > 0.0 { self.y / maximum } else { 0.0 };
+        Some(Bar {
+            axis: Axis::Vertical,
+            length,
+            maximum,
+            thumb_size,
+            thumb_pos: OVERLAY_ARROW + (ratio * (track - thumb_size)).round(),
+            overlay: true,
+        })
+    }
+
     pub fn bar(&self, axis: Axis) -> Option<Bar> {
         let view = self.view?;
+        if axis == Axis::Vertical && view.overlay {
+            return self.overlay_bar(view);
+        }
         let grid_units = self.grid.is_some();
         let (shown, length, page, extent, maximum, value) = match axis {
             Axis::Vertical => (
@@ -247,6 +301,7 @@ impl State {
             maximum,
             thumb_size,
             thumb_pos,
+            overlay: false,
         })
     }
 
@@ -255,6 +310,13 @@ impl State {
         let (x, y) = (point.0 - view.x, point.1 - view.y);
         if x < 0.0 || y < 0.0 || x >= view.width || y >= view.height {
             return None;
+        }
+        if view.overlay {
+            let inside = x >= view.width - OVERLAY_WIDTH && x < view.width - 1.0;
+            return self
+                .bar(Axis::Vertical)
+                .filter(|_| inside && y < view.bottom)
+                .map(|bar| bar.hit(y));
         }
         if x >= view.right && y < view.bottom {
             return self.bar(Axis::Vertical).map(|bar| bar.hit(y));
@@ -267,7 +329,8 @@ impl State {
 
     pub fn mouse_move(&mut self, point: (f32, f32)) -> bool {
         self.pointer = point;
-        let old = (self.x, self.y, self.hover);
+        let old = (self.x, self.y, self.hover, self.overlay_shown());
+        self.reveal(point);
         self.hover = self.hit(point);
         if let Some(drag) = &self.drag {
             if let Some(bar) = self.bar(drag.axis) {
@@ -276,6 +339,10 @@ impl State {
                     Axis::Horizontal => point.0,
                 };
                 let value = match drag.axis {
+                    Axis::Vertical if bar.overlay => (drag.value
+                        + (position - drag.pointer) * bar.maximum / bar.travel().max(1.0))
+                    .round()
+                    .clamp(0.0, bar.maximum),
                     Axis::Vertical => {
                         let maximum = self.maximum_units();
                         let units = (drag.value
@@ -305,13 +372,62 @@ impl State {
                 };
             }
         }
-        old != (self.x, self.y, self.hover)
+        old != (self.x, self.y, self.hover, self.overlay_shown())
+    }
+
+    fn reveal(&mut self, point: (f32, f32)) {
+        let Some(view) = self.view.filter(|view| view.overlay) else {
+            return;
+        };
+        let (x, y) = (point.0 - view.x, point.1 - view.y);
+        let inside = x >= 0.0 && y >= 0.0 && x < view.width && y < view.height;
+        if inside {
+            self.show_overlay(OVERLAY_HIDE_INSIDE);
+        } else if self.inside {
+            self.show_overlay(OVERLAY_HIDE_OUTSIDE);
+        }
+        self.inside = inside;
+    }
+
+    fn show_overlay(&mut self, hide_delay: u32) {
+        self.revealed = true;
+        self.fading = None;
+        self.hide_delay = Some(hide_delay);
+    }
+
+    pub fn overlay_shown(&self) -> bool {
+        self.revealed && self.fading.is_none()
+    }
+
+    pub fn overlay_opacity(&self) -> f32 {
+        self.fading.map_or(1.0, |start| {
+            (1.0 - start.elapsed().as_secs_f32() / OVERLAY_FADE.as_secs_f32()).clamp(0.0, 1.0)
+        })
+    }
+
+    pub fn take_hide_delay(&mut self) -> Option<u32> {
+        self.hide_delay.take()
+    }
+
+    pub fn conceal(&mut self) -> bool {
+        if !self.revealed || self.hover.is_some() || self.pressed.is_some() || self.drag.is_some() {
+            return false;
+        }
+        let start = *self.fading.get_or_insert_with(std::time::Instant::now);
+        if start.elapsed() >= OVERLAY_FADE {
+            self.revealed = false;
+            self.fading = None;
+        }
+        true
     }
 
     pub fn leave(&mut self) -> bool {
-        let changed = self.hover.is_some();
+        let old = (self.hover, self.overlay_shown());
         self.hover = None;
-        changed
+        if std::mem::take(&mut self.inside) && self.view.is_some_and(|view| view.overlay) {
+            self.show_overlay(OVERLAY_HIDE_OUTSIDE);
+        }
+        old != (self.hover, self.overlay_shown())
     }
 
     pub fn press(&mut self, point: (f32, f32)) -> bool {
@@ -330,6 +446,7 @@ impl State {
                     Axis::Horizontal => point.0,
                 },
                 value: match hit.axis {
+                    Axis::Vertical if self.view.is_some_and(|view| view.overlay) => self.y,
                     Axis::Vertical => self.units(self.y),
                     Axis::Horizontal => {
                         if self.columns.is_empty() {
@@ -446,18 +563,24 @@ impl State {
             return false;
         }
         let old = (self.x, self.y);
+        self.reveal(point);
         let notches = wheel_steps(&mut self.remainder, delta);
         if notches != 0 {
-            if self
+            let gallery = self
                 .grid
                 .as_ref()
-                .is_some_and(|model| model.kind == super::grid::Kind::Gallery)
-            {
-                let target = (self.gallery_motion.map_or(self.y, |motion| motion.1)
-                    - notches as f32 * 48.0)
+                .is_some_and(|model| model.kind == super::grid::Kind::Gallery);
+            if gallery || view.overlay {
+                let step = if gallery {
+                    48.0
+                } else {
+                    (view.rows_height * crate::app::home::WHEEL_FRACTION).round()
+                };
+                let target = (self.wheel_motion.map_or(self.y, |motion| motion.1)
+                    - notches as f32 * step)
                     .clamp(0.0, view.maximum_y());
                 if target != self.y {
-                    self.gallery_motion = Some((self.y, target, std::time::Instant::now()));
+                    self.wheel_motion = Some((self.y, target, std::time::Instant::now()));
                     return true;
                 }
                 return false;
@@ -572,6 +695,7 @@ mod tests {
             plate: 22.0,
             count: 5019,
             bar: true,
+            overlay: false,
             horizontal: true,
             column_maximum: None,
         }

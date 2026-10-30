@@ -314,7 +314,7 @@ impl State {
             .is_some_and(|folder| folder.settings.status_bar);
         let snapshot = list.folder.as_ref().map(|folder| {
             (
-                folder.order.len(),
+                folder.item_count(),
                 picked.len(),
                 (!picked.is_empty() && picked.iter().all(|entry| !entry.is_dir))
                     .then(|| picked.iter().map(|entry| entry.size).sum()),

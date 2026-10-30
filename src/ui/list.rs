@@ -176,7 +176,7 @@ pub struct Folder {
     pub layout: Arc<crate::app::group::DetailsLayout>,
     pub grid: Option<Arc<super::grid::Model>>,
     pub gallery_filter: Option<String>,
-    pub home_filter: u8,
+    pub home: crate::app::home::State,
     pub filter: Option<crate::app::filter::Filter>,
     pub network_notice: Option<String>,
     pub library_origins: Arc<Vec<shell::library::Origin>>,
@@ -197,12 +197,21 @@ pub struct Row {
 
 impl Folder {
     pub fn awaiting_grid(&self) -> bool {
-        self.grid.is_none()
-            && self.view.mode != 6
-            && !self
-                .crumbs
-                .last()
-                .is_some_and(|crumb| crate::app::ids::same(&crumb.id, crate::app::ids::HOME))
+        self.grid.is_none() && (self.view.mode != 6 || self.is_home())
+    }
+
+    pub fn item_count(&self) -> usize {
+        if self.is_home() {
+            self.entries.len()
+        } else {
+            self.order.len()
+        }
+    }
+
+    pub fn is_home(&self) -> bool {
+        self.crumbs
+            .last()
+            .is_some_and(|crumb| crate::app::ids::same(&crumb.id, crate::app::ids::HOME))
     }
 
     pub fn set_collapsed(&mut self, collapsed: HashSet<String>) {
@@ -266,7 +275,7 @@ enum Request {
     ),
     DiscoveryBatch(u64, ShellEntry),
     DiscoveryFinished(u64, Result<(), String>),
-    HomeFilter(u64, u8),
+    Home(u64, crate::app::home::State),
     Filter(u64, Option<crate::app::filter::Filter>),
     FilterMenu(u64, sort::SortKey),
     SearchBatch(Vec<ShellEntry>),
@@ -589,9 +598,9 @@ impl Job {
                         counts,
                     ));
                 }
-                Request::HomeFilter(epoch, kind) => {
+                Request::Home(epoch, state) => {
                     generation = epoch;
-                    folder.home_filter = kind;
+                    folder.home = state;
                     arrange(&mut folder, &items);
                     send(Update::Changed(
                         epoch,
@@ -947,7 +956,7 @@ impl Job {
                             counts.0 += 1;
                             updated.collapsed = folder.collapsed.clone();
                             updated.filter = folder.filter.clone();
-                            updated.home_filter = folder.home_filter;
+                            updated.home = folder.home;
                             updated.gallery_filter = folder.gallery_filter.clone();
                             updated.rebuild_layout();
                             folder = updated;
@@ -1213,8 +1222,9 @@ impl List {
             return Ok(());
         };
         let path = folder.crumbs.last().map_or("", |crumb| crumb.id.as_str());
-        if folder.view.mode == 6 && !crate::app::ids::same(path, crate::app::ids::GALLERY)
-            || crate::app::ids::same(path, crate::app::ids::HOME)
+        if folder.view.mode == 6
+            && !crate::app::ids::same(path, crate::app::ids::GALLERY)
+            && !crate::app::ids::same(path, crate::app::ids::HOME)
         {
             return Ok(());
         }
@@ -1254,11 +1264,44 @@ impl List {
     }
 
     pub fn home_filter(&mut self, kind: u8) -> Result<(), String> {
+        let Some(folder) = &self.folder else {
+            return Ok(());
+        };
+        self.set_home(crate::app::home::State {
+            filter: kind,
+            ..folder.home
+        })
+    }
+
+    pub fn home_pivot(&mut self, pivot: crate::app::home::Pivot) -> Result<(), String> {
+        let Some(folder) = &self.folder else {
+            return Ok(());
+        };
+        if folder.home.pivot == pivot {
+            return Ok(());
+        }
+        self.set_home(crate::app::home::State {
+            pivot,
+            ..folder.home
+        })
+    }
+
+    pub fn home_toggle(&mut self, section: crate::app::home::Section) -> Result<(), String> {
+        let Some(folder) = &self.folder else {
+            return Ok(());
+        };
+        self.set_home(crate::app::home::State {
+            collapsed: folder.home.collapsed.toggled(section),
+            ..folder.home
+        })
+    }
+
+    fn set_home(&mut self, state: crate::app::home::State) -> Result<(), String> {
         self.generation += 1;
         self.pending.clear();
         self.rows.clear();
         self.interaction.selection = Default::default();
-        self.send(Request::HomeFilter(self.generation, kind))
+        self.send(Request::Home(self.generation, state))
     }
 
     pub fn set_mode(&mut self, mode: i32, size: u32) -> Result<(), String> {
@@ -1763,7 +1806,7 @@ impl List {
                         current.entries = folder.entries.clone();
                         current.order = folder.order.clone();
                         current.headers = folder.headers.clone();
-                        current.home_filter = folder.home_filter;
+                        current.home = folder.home;
                         current.filter = folder.filter.clone();
                         current.library_origins = folder.library_origins.clone();
                         current.network_notice = folder.network_notice.clone();
@@ -2024,6 +2067,36 @@ fn read_cells(
         .collect()
 }
 
+fn home_cells(entry: &ShellEntry, items: &shell::columns::Items) -> Vec<String> {
+    let value = |name: &str| {
+        shell::columns::key(name).map(|key| shell::columns::sort_value(items, &entry.path, &key))
+    };
+    let accessed = value("System.DateAccessed")
+        .and_then(|value| value.number)
+        .map(|ticks| {
+            crate::app::format::modified(
+                ((ticks - 116_444_736_000_000_000.0) / 10_000.0).max(0.0) as u64
+            )
+        })
+        .unwrap_or_default();
+    let activity = value("System.ActivityInfo")
+        .map(|value| value.text)
+        .unwrap_or_default();
+    let pinned = value("System.Home.IsPinned")
+        .and_then(|value| value.number)
+        .is_some_and(|number| number != 0.0);
+    let storage = value("System.StorageProviderState")
+        .and_then(|value| value.number)
+        .map_or(String::new(), |state| (state as i32).to_string());
+    vec![
+        shell::home::location(&entry.path),
+        accessed,
+        activity,
+        if pinned { "1".into() } else { String::new() },
+        storage,
+    ]
+}
+
 fn ready_rows(
     folder: &Folder,
     indices: Vec<usize>,
@@ -2048,7 +2121,13 @@ fn ready_rows(
             };
             Some(Row {
                 index,
-                cells: if grid {
+                cells: if folder
+                    .grid
+                    .as_ref()
+                    .is_some_and(|model| model.kind == super::grid::Kind::Home)
+                {
+                    home_cells(entry, items)
+                } else if grid {
                     Vec::new()
                 } else {
                     read_cells(folder, entry, &folder.columns, &keys, items)
@@ -3000,7 +3079,7 @@ fn load(path: &str, session: Option<crate::app::view::ResolvedView>) -> Result<F
         layout: Arc::new(crate::app::group::DetailsLayout::default()),
         grid: None,
         gallery_filter: None,
-        home_filter: 0,
+        home: Default::default(),
         filter: None,
         network_notice: network_notice(path),
         library_origins: Arc::new(if shell::library::is_library(path) {
@@ -3020,22 +3099,30 @@ fn load(path: &str, session: Option<crate::app::view::ResolvedView>) -> Result<F
 }
 
 fn arrange(folder: &mut Folder, items: &shell::columns::Items) {
-    let mut values = HashMap::new();
-    if let Some(key) = folder.view.sort.key.property() {
-        for entry in folder.entries.iter() {
-            values.insert(
-                entry.path.clone(),
-                shell::columns::sort_value(items, &entry.path, &key),
-            );
-        }
-    }
+    let values = std::iter::once(&folder.view.sort)
+        .chain(&folder.view.extra_sorts)
+        .map(|sort| {
+            sort.key.property().map_or_else(HashMap::new, |key| {
+                folder
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.path.clone(),
+                            shell::columns::sort_value(items, &entry.path, &key),
+                        )
+                    })
+                    .collect()
+            })
+        })
+        .collect::<Vec<_>>();
     let home = folder
         .crumbs
         .last()
         .is_some_and(|crumb| crate::app::ids::same(&crumb.id, crate::app::ids::HOME));
     let mut order = (0..folder.entries.len())
         .filter(|&index| {
-            !home || crate::app::home::matches(&folder.entries[index], folder.home_filter)
+            !home || crate::app::home::matches(&folder.entries[index], folder.home.filter)
         })
         .collect::<Vec<_>>();
     sort::order(
@@ -3130,7 +3217,21 @@ fn group_order(folder: &mut Folder, items: &shell::columns::Items, mut order: Ve
                     },
                 )
             })
-            .collect();
+            .collect::<HashMap<_, _>>();
+        if crate::app::ids::same(path, crate::app::ids::HOME) {
+            let home = &mut folder.home;
+            let quick = |index: &usize| buckets[index].rank == crate::app::home::QUICK_ACCESS;
+            home.has_quick = order.iter().any(quick);
+            let shown = home.pivot.group();
+            order.retain(|index| {
+                if quick(index) {
+                    !home.collapsed.quick
+                } else {
+                    !home.collapsed.list && buckets[index].rank == shown
+                }
+            });
+            home.quick = order.iter().filter(|index| quick(index)).count();
+        }
         crate::app::group::arrange(&mut order, &buckets, group)
     } else {
         Vec::new()

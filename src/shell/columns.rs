@@ -286,10 +286,26 @@ pub fn sort_value(items: &Items, path: &str, key: &PROPERTYKEY) -> SortValue {
             }
             _ => None,
         };
-        let text = PropVariantToStringAlloc(&value)
-            .map(|p| take_pwstr(p))
+        let text = enumerated_text(key, &value)
+            .or_else(|| PropVariantToStringAlloc(&value).ok().map(|p| take_pwstr(p)))
             .unwrap_or_default();
         SortValue { text, number, date }
+    }
+}
+
+fn enumerated_text(
+    key: &PROPERTYKEY,
+    value: &windows::Win32::System::Com::StructuredStorage::PROPVARIANT,
+) -> Option<String> {
+    use windows::Win32::UI::Shell::PropertiesSystem::PDDT_ENUMERATED;
+    let desc = description(key)?;
+    unsafe {
+        if desc.GetDisplayType().ok()? != PDDT_ENUMERATED {
+            return None;
+        }
+        desc.FormatForDisplay(value, PDFF_DEFAULT)
+            .ok()
+            .map(|p| take_pwstr(p))
     }
 }
 

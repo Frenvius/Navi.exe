@@ -24,6 +24,7 @@ pub struct Band {
 pub struct State {
     pub selection: Selection,
     pub hover: Option<usize>,
+    pub home_button: Option<crate::app::home::RowButton>,
     pub drop_row: Option<usize>,
     pub group_focus: Option<String>,
     pub group_hover: Option<String>,
@@ -48,6 +49,7 @@ impl Default for State {
         Self {
             selection: Selection::default(),
             hover: None,
+            home_button: None,
             drop_row: None,
             group_focus: None,
             group_hover: None,
@@ -111,7 +113,7 @@ impl State {
             .and_then(|p| selection::row_of(&folder.order, &folder.entries, p))
     }
 
-    pub fn hit(&self, view: Viewport, scroll: &scroll::State, folder: &Folder) -> Option<usize> {
+    fn page_point(&self, view: Viewport, scroll: &scroll::State) -> Option<(f32, f32)> {
         let (x, y) = self.pointer?;
         if x < view.x
             || x >= view.x + view.right
@@ -120,8 +122,29 @@ impl State {
         {
             return None;
         }
-        let x = x - view.x + scroll.x;
-        let y = y - view.y - view.header + scroll.y;
+        Some((x - view.x + scroll.x, y - view.y - view.header + scroll.y))
+    }
+
+    fn home_button_at(
+        &self,
+        view: Viewport,
+        scroll: &scroll::State,
+        folder: &Folder,
+    ) -> Option<crate::app::home::RowButton> {
+        let row = self.hover.filter(|&row| row >= folder.home.quick)?;
+        let model = folder
+            .grid
+            .as_ref()
+            .filter(|model| model.kind == super::grid::Kind::Home)?;
+        crate::app::home::row_button_at(
+            *model.layout.cells.get(row)?,
+            model.home.list_columns[1],
+            self.page_point(view, scroll)?,
+        )
+    }
+
+    pub fn hit(&self, view: Viewport, scroll: &scroll::State, folder: &Folder) -> Option<usize> {
+        let (x, y) = self.page_point(view, scroll)?;
         if let Some(model) = &folder.grid {
             return model.hit((x, y));
         }
@@ -197,6 +220,7 @@ impl State {
             self.mark_all();
         }
         if next == self.hover {
+            self.rehover_home_button(view, scroll, folder);
             return;
         }
         if let Some(row) = self.hover {
@@ -208,6 +232,18 @@ impl State {
         self.hover = next;
         self.hover_anchor = None;
         self.hover_pending = false;
+        self.rehover_home_button(view, scroll, folder);
+    }
+
+    fn rehover_home_button(&mut self, view: Viewport, scroll: &scroll::State, folder: &Folder) {
+        let button = self.home_button_at(view, scroll, folder);
+        if button == self.home_button {
+            return;
+        }
+        self.home_button = button;
+        if let Some(row) = self.hover {
+            self.mark(row);
+        }
     }
 
     pub fn move_pointer(&mut self, point: (f32, f32), folder: &Folder, scroll: &scroll::State) {

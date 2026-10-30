@@ -339,15 +339,20 @@ impl Surface {
                 }
                 continue;
             };
-            let dimensions = match axis {
-                Axis::Vertical => (17.0, view.bottom),
-                Axis::Horizontal => (view.right, 17.0),
+            let (dimensions, left, background) = match axis {
+                Axis::Vertical if bar.overlay => (
+                    (super::scroll::OVERLAY_WIDTH, view.bottom),
+                    view.width - super::scroll::OVERLAY_WIDTH,
+                    &theme.content,
+                ),
+                Axis::Vertical => ((17.0, view.bottom), view.right, &theme.track),
+                Axis::Horizontal => ((view.right, 17.0), 0.0, &theme.track),
             };
             layer.resize((
                 (dimensions.0 * scale).round().max(1.0) as u32,
                 (dimensions.1 * scale).round().max(1.0) as u32,
             ))?;
-            renderer.update(layer, None, dpi, &theme.track, |canvas| {
+            renderer.update(layer, None, dpi, background, |canvas| {
                 super::bars::draw(canvas, &mut self.bar_assets, theme, scroll, bar)
             })?;
             unsafe {
@@ -357,11 +362,7 @@ impl Surface {
                     right: dimensions.0 * scale,
                     bottom: dimensions.1 * scale,
                 })?;
-                layer.visual.SetOffsetX2(if axis == Axis::Vertical {
-                    view.right * scale
-                } else {
-                    0.0
-                })?;
+                layer.visual.SetOffsetX2(left * scale)?;
                 layer.visual.SetOffsetY2(if axis == Axis::Horizontal {
                     view.bottom * scale
                 } else {

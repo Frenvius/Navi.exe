@@ -157,8 +157,6 @@ pub fn needs_property(key: &PROPERTYKEY) -> bool {
     !known(key)
 }
 
-/// What the folder's view says about its columns: the shown ones with their widths (empty
-/// for its type's defaults) and its type's list.
 pub fn initial(
     saved: &[(PROPERTYKEY, u32)],
     type_columns: &[(PROPERTYKEY, bool, Option<u32>)],
@@ -174,20 +172,23 @@ pub fn initial(
             .map(|(k, shown, chars)| (*k, *shown, chars.map(|c| c as f32 * 8.0)))
             .collect()
     };
+    let listed_width = |key: &PROPERTYKEY| {
+        let listed = list
+            .iter()
+            .find(|(k, _, _)| k == key)
+            .and_then(|(_, _, w)| *w);
+        width_for(key, listed)
+    };
     let shown = if saved.is_empty() {
         list.iter()
             .filter(|(_, shown, _)| *shown)
-            .map(|(k, _, w)| {
-                (
-                    *k,
-                    w.or_else(|| default_width(k))
-                        .or_else(|| describe(k).map(|c| c.width))
-                        .unwrap_or(120.0),
-                )
-            })
+            .map(|(k, _, _)| (*k, listed_width(k)))
             .collect()
     } else {
-        saved.iter().map(|(k, w)| (*k, *w as f32)).collect()
+        saved
+            .iter()
+            .map(|(k, w)| (*k, if *w > 0 { *w as f32 } else { listed_width(k) }))
+            .collect()
     };
     (shown, list.into_iter().map(|(k, _, _)| k).collect())
 }

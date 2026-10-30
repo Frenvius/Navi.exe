@@ -37,6 +37,7 @@ pub struct Viewport {
     pub plate: f32,
     pub count: usize,
     pub bar: bool,
+    pub overlay: bool,
     pub horizontal: bool,
     pub column_maximum: Option<f32>,
 }
@@ -47,11 +48,10 @@ impl Viewport {
     }
 
     pub fn at(size: (f32, f32), folder: &Folder, left: f32, top: f32) -> Self {
-        let gallery = folder
-            .crumbs
-            .last()
-            .is_some_and(|crumb| crate::app::ids::same(&crumb.id, crate::app::ids::GALLERY));
-        let left = left - if gallery { 2.0 } else { 0.0 };
+        let path = folder.crumbs.last().map_or("", |crumb| crumb.id.as_str());
+        let home = crate::app::ids::same(path, crate::app::ids::HOME);
+        let xaml = home || crate::app::ids::same(path, crate::app::ids::GALLERY);
+        let left = left - if xaml { 2.0 } else { 0.0 };
         let pane = if (folder.panes.0 || folder.panes.1) && size.0 - left >= 335.0 {
             folder.pane_width
         } else {
@@ -72,10 +72,6 @@ impl Viewport {
         };
         let plate = if folder.settings.compact { 22.0 } else { 24.0 };
         let width = (size.0 - left - pane).max(0.0);
-        let home = folder
-            .crumbs
-            .last()
-            .is_some_and(|crumb| crate::app::ids::same(&crumb.id, crate::app::ids::HOME));
         let header = if home {
             0.0
         } else {
@@ -106,11 +102,11 @@ impl Viewport {
         );
         let tall = extent_y > (height - header).max(0.0);
         let wide = extent_x > width;
-        let bar = !gallery
+        let bar = !xaml
             && !folder.order.is_empty()
             && (tall || (wide && extent_y > height - header - 17.0));
         let horizontal =
-            !gallery && !folder.order.is_empty() && (wide || (tall && extent_x > width - 17.0));
+            !xaml && !folder.order.is_empty() && (wide || (tall && extent_x > width - 17.0));
         let bottom = (height - if horizontal { 17.0 } else { 0.0 }).max(0.0);
         let right = (width - if bar { 17.0 } else { 0.0 }).max(0.0);
         let rows_height = (bottom - header).max(0.0);
@@ -130,6 +126,7 @@ impl Viewport {
             plate,
             count: folder.order.len(),
             bar,
+            overlay: home && tall,
             horizontal,
             column_maximum: folder
                 .grid
@@ -986,7 +983,7 @@ mod tests {
             )),
             grid: None,
             gallery_filter: None,
-            home_filter: 0,
+            home: Default::default(),
             filter: None,
             network_notice: None,
             library_origins: std::sync::Arc::new(Vec::new()),
@@ -1425,11 +1422,11 @@ pub fn draw_empty(
     let Some(folder) = list.folder.as_ref() else {
         return Ok(());
     };
-    if !folder.order.is_empty() || !folder.layout.headers.is_empty() || list.search.busy() {
+    if folder.item_count() > 0 || !folder.layout.headers.is_empty() || list.search.busy() {
         return Ok(());
     }
     let path = folder.crumbs.last().map_or("", |crumb| crumb.id.as_str());
-    let home = crate::app::ids::same(path, crate::app::ids::HOME);
+    let home = folder.is_home();
     let value = if home {
         crate::i18n::tr("empty.home").to_owned()
     } else if crate::app::ids::is_search(path) {

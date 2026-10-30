@@ -10,6 +10,7 @@ use super::theme::Theme;
 #[derive(Default)]
 pub struct Assets {
     arrows: Vec<ID2D1PathGeometry>,
+    overlay: Vec<ID2D1PathGeometry>,
 }
 
 impl Assets {
@@ -55,33 +56,172 @@ impl Assets {
                             (0.0, 8.0),
                         ],
                     };
-                    let geometry = factory.CreatePathGeometry()?;
-                    let sink = geometry.Open()?;
-                    for (index, &(x, y)) in vertices.iter().enumerate() {
-                        let mut point = D2D1_ARC_SEGMENT::default().point;
-                        let (width, height) = if direction < 2 {
-                            (8.0, 6.0)
-                        } else {
-                            (6.0, 8.0)
-                        };
-                        point.X =
-                            if direction == 2 { 8.0 } else { 9.0 } + (x - width / 2.0) * scale;
-                        point.Y = 9.0 + (y - height / 2.0) * scale;
-                        if index == 0 {
-                            sink.BeginFigure(point, D2D1_FIGURE_BEGIN_FILLED);
-                        } else {
-                            sink.AddLine(point);
-                        }
-                    }
-                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-                    sink.Close()?;
-                    self.arrows.push(geometry);
+                    let (width, height) = if direction < 2 {
+                        (8.0, 6.0)
+                    } else {
+                        (6.0, 8.0)
+                    };
+                    let points = vertices.iter().map(|&(x, y)| {
+                        (
+                            if direction == 2 { 8.0 } else { 9.0 } + (x - width / 2.0) * scale,
+                            9.0 + (y - height / 2.0) * scale,
+                        )
+                    });
+                    self.arrows.push(polygon(&factory, points)?);
                 }
+            }
+            for vertices in OVERLAY_ARROWS {
+                let points = vertices.iter().map(|&(x, y)| (x + 2.0, y + 6.0));
+                self.overlay.push(polygon(&factory, points)?);
             }
         }
         Ok(())
     }
 }
+
+fn polygon(
+    factory: &ID2D1Factory,
+    points: impl Iterator<Item = (f32, f32)>,
+) -> Result<ID2D1PathGeometry> {
+    let mut points = points.map(|(x, y)| {
+        let mut point = D2D1_ARC_SEGMENT::default().point;
+        point.X = x;
+        point.Y = y;
+        point
+    });
+    unsafe {
+        let geometry = factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        if let Some(first) = points.next() {
+            sink.BeginFigure(first, D2D1_FIGURE_BEGIN_FILLED);
+            points.for_each(|point| sink.AddLine(point));
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+        }
+        sink.Close()?;
+        Ok(geometry)
+    }
+}
+
+const OVERLAY_ARROWS: [[(f32, f32); 6]; 2] = [
+    [
+        (3.05, 0.0),
+        (4.95, 0.0),
+        (7.89, 4.3),
+        (7.89, 6.0),
+        (0.11, 6.0),
+        (0.11, 4.3),
+    ],
+    [
+        (0.11, 0.0),
+        (7.89, 0.0),
+        (7.89, 1.7),
+        (4.95, 6.0),
+        (3.05, 6.0),
+        (0.11, 1.7),
+    ],
+];
+
+fn rounded(canvas: &Canvas, rect: D2D_RECT_F, radius: (f32, f32), color: &D2D1_COLOR_F) {
+    unsafe {
+        canvas.brush.SetColor(color);
+        canvas.context.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect,
+                radiusX: radius.0,
+                radiusY: radius.1,
+            },
+            &canvas.brush,
+        );
+    }
+}
+
+fn overlay_thumb(theme: &Theme) -> D2D1_COLOR_F {
+    if theme.content.r < 0.5 {
+        D2D1_COLOR_F { a: 0.5442, ..WHITE }
+    } else {
+        D2D1_COLOR_F { a: 0.4458, ..BLACK }
+    }
+}
+
+fn draw_indicator(canvas: &Canvas, theme: &Theme, bar: Bar, opacity: f32) {
+    let rect = D2D_RECT_F {
+        left: 7.0,
+        top: bar.thumb_pos,
+        right: 9.0,
+        bottom: bar.thumb_pos + bar.thumb_size,
+    };
+    let color = overlay_thumb(theme);
+    let color = D2D1_COLOR_F {
+        a: color.a * opacity,
+        ..color
+    };
+    rounded(canvas, rect, (1.0, 3.0), &color);
+}
+
+fn draw_overlay(canvas: &Canvas, assets: &mut Assets, theme: &Theme, bar: Bar) -> Result<()> {
+    let dark = theme.content.r < 0.5;
+    let thumb = overlay_thumb(theme);
+    let bottom = bar.thumb_pos + bar.thumb_size;
+    let track = D2D_RECT_F {
+        left: 0.0,
+        top: 1.0,
+        right: OVERLAY_TRACK,
+        bottom: bar.length - 1.0,
+    };
+    rounded(
+        canvas,
+        track,
+        (OVERLAY_TRACK / 2.0, OVERLAY_TRACK / 2.0),
+        if dark { &TRACK_DARK } else { &TRACK_LIGHT },
+    );
+    let rect = D2D_RECT_F {
+        left: 3.0,
+        top: bar.thumb_pos,
+        right: 9.0,
+        bottom,
+    };
+    rounded(canvas, rect, (3.0, 3.0), &thumb);
+    assets.initialize(canvas)?;
+    for (arrow, at) in assets.overlay.iter().zip([0.0, bar.length - 18.0]) {
+        unsafe {
+            let mut original = Default::default();
+            canvas.context.GetTransform(&mut original);
+            let mut transform = original;
+            transform.M32 += at;
+            canvas.context.SetTransform(&transform);
+            canvas.brush.SetColor(&thumb);
+            canvas.context.FillGeometry(arrow, &canvas.brush, None);
+            canvas.context.SetTransform(&original);
+        }
+    }
+    Ok(())
+}
+
+const OVERLAY_TRACK: f32 = 12.0;
+const WHITE: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 1.0,
+    g: 1.0,
+    b: 1.0,
+    a: 1.0,
+};
+const BLACK: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
+const TRACK_DARK: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 45.0 / 255.0,
+    g: 45.0 / 255.0,
+    b: 45.0 / 255.0,
+    a: 1.0,
+};
+const TRACK_LIGHT: D2D1_COLOR_F = D2D1_COLOR_F {
+    r: 250.0 / 255.0,
+    g: 250.0 / 255.0,
+    b: 250.0 / 255.0,
+    a: 1.0,
+};
 
 pub fn draw(
     canvas: &Canvas,
@@ -90,6 +230,13 @@ pub fn draw(
     state: &State,
     bar: Bar,
 ) -> Result<()> {
+    if bar.overlay && !state.hot(bar.axis) {
+        draw_indicator(canvas, theme, bar, state.overlay_opacity());
+        return Ok(());
+    }
+    if bar.overlay {
+        return draw_overlay(canvas, assets, theme, bar);
+    }
     let rect = |along: f32, across: f32, length: f32, thickness: f32| match bar.axis {
         Axis::Vertical => D2D_RECT_F {
             left: across,

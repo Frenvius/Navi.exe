@@ -364,6 +364,24 @@ msgstr "No items match your search."
 msgid "empty.home"
 msgstr "We'll show your recent files and other content here based on your activity"
 
+msgid "empty.favorites"
+msgstr "Your favorites will appear here"
+
+msgid "empty.favorites-detail"
+msgstr "Select a file, then select Add to Favorites to access it here."
+
+msgid "empty.recent"
+msgstr "Your recent activity will show here"
+
+msgid "empty.recent-detail"
+msgstr "You'll get quick access to your recently used files here."
+
+msgid "home.open-location.tip"
+msgstr "Open file location"
+
+msgid "home.more.tip"
+msgstr "See more actions for this file"
+
 msgid "tiles.drives"
 msgstr "Devices and drives"
 

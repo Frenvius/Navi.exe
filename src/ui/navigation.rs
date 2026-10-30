@@ -710,6 +710,7 @@ impl State {
             maximum: self.maximum() as f32,
             thumb_size: thumb,
             thumb_pos: 17.0 + (self.top as f32 / self.maximum() as f32 * (track - thumb)).round(),
+            overlay: false,
         })
     }
 

@@ -17,6 +17,7 @@ mod edit;
 mod filter;
 mod grid;
 mod header;
+mod home;
 mod hosted;
 mod icons;
 mod input;
@@ -661,17 +662,22 @@ unsafe extern "system" fn window_proc(
             ) {
                 return LRESULT(0);
             }
-            let changed = WINDOW.with(|slot| {
-                slot.borrow_mut().as_mut().is_some_and(|w| {
-                    w.scroll.wheel(
+            let (changed, shown) = WINDOW.with(|slot| {
+                slot.borrow_mut().as_mut().map_or((false, false), |w| {
+                    let hidden = !w.scroll.overlay_shown();
+                    let changed = w.scroll.wheel(
                         (point.x as f32 / scale, point.y as f32 / scale),
                         (wparam.0 >> 16) as i16 as i32,
-                    )
+                    );
+                    (changed, hidden && w.scroll.overlay_shown())
                 })
             });
             if changed {
                 grid::start_animation(hwnd);
                 tooltip::scrolled();
+            }
+            grid::arm_overlay_hide(hwnd);
+            if changed || shown {
                 invalidate_view(hwnd);
             }
             return LRESULT(0);
@@ -755,6 +761,9 @@ unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
             if grid::timeline_press(hwnd, client_point(hwnd, lparam)) {
+                return LRESULT(0);
+            }
+            if grid::home_press(hwnd, client_point(hwnd, lparam)) {
                 return LRESULT(0);
             }
             match press_scroll(hwnd, client_point(hwnd, lparam)) {
@@ -1605,6 +1614,7 @@ fn move_scroll(hwnd: HWND, point: (f32, f32)) {
             .as_mut()
             .is_some_and(|w| w.scroll.mouse_move(point))
     });
+    grid::arm_overlay_hide(hwnd);
     if changed {
         invalidate_view(hwnd);
     }
@@ -1612,6 +1622,7 @@ fn move_scroll(hwnd: HWND, point: (f32, f32)) {
 
 fn leave_scroll(hwnd: HWND) {
     let changed = WINDOW.with(|slot| slot.borrow_mut().as_mut().is_some_and(|w| w.scroll.leave()));
+    grid::arm_overlay_hide(hwnd);
     if changed {
         invalidate_view(hwnd);
     }

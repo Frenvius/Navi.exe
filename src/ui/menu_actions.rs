@@ -11,6 +11,23 @@ fn error(error: String) -> Error {
     Error::new(E_FAIL, error)
 }
 
+pub fn open_location(hwnd: HWND, path: String) -> Result<()> {
+    let Some(parent) = std::path::Path::new(&path).parent() else {
+        return Ok(());
+    };
+    super::navigate(
+        hwnd,
+        super::Navigation::Open(parent.to_string_lossy().into_owned()),
+    )?;
+    WINDOW
+        .with(|slot| {
+            slot.borrow_mut().as_mut().map_or(Ok(()), |window| {
+                window.list.select_created(vec![path], &mut window.scroll)
+            })
+        })
+        .map_err(error)
+}
+
 pub fn context(hwnd: HWND) -> Option<Context> {
     WINDOW.with(|slot| {
         let slot = slot.borrow();
@@ -110,7 +127,7 @@ pub fn command(hwnd: HWND, command: Command, origin: Origin) {
                 slot.borrow()
                     .as_ref()
                     .and_then(|window| window.list.folder.as_ref())
-                    .map_or(0, |folder| folder.home_filter)
+                    .map_or(0, |folder| folder.home.filter)
             });
             ("filter", crate::app::home::filter_items(kind))
         }
@@ -543,21 +560,7 @@ pub fn run(hwnd: HWND, context: Context, action: Action) {
                 crate::shell::ops::invoke_verb(hwnd, &folder, &paths, "properties", false)
                     .map_err(error)?;
             }
-            Action::OpenLocation(path) => {
-                if let Some(parent) = std::path::Path::new(&path).parent() {
-                    super::navigate(
-                        hwnd,
-                        super::Navigation::Open(parent.to_string_lossy().into_owned()),
-                    )?;
-                    WINDOW
-                        .with(|slot| {
-                            slot.borrow_mut().as_mut().map_or(Ok(()), |window| {
-                                window.list.select_created(vec![path], &mut window.scroll)
-                            })
-                        })
-                        .map_err(error)?;
-                }
-            }
+            Action::OpenLocation(path) => open_location(hwnd, path)?,
             Action::NewFolder => {
                 let folder = crate::shell::library::save_folder(&context.path)
                     .unwrap_or(context.path.clone());

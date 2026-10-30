@@ -13,6 +13,26 @@ use super::text::{Family, TextStyle};
 pub enum Placement {
     Above,
     Below,
+    Pointer,
+}
+
+fn origin(pointer: POINT, placement: Placement, size: (f32, f32), scale: f32) -> (i32, i32) {
+    let work = crate::frame::work_area(pointer.x, pointer.y);
+    let width = (size.0 * scale).round() as i32;
+    let height = (size.1 * scale).round() as i32;
+    let x = match placement {
+        Placement::Pointer => pointer.x + scale.round() as i32,
+        _ => pointer.x - (size.0 * scale / 2.0).round() as i32,
+    };
+    let y = match placement {
+        Placement::Above => pointer.y - ((20.0 + size.1) * scale).round() as i32,
+        Placement::Below => pointer.y + (20.0 * scale).round() as i32,
+        Placement::Pointer => pointer.y + (11.0 * scale).round() as i32,
+    };
+    (
+        x.clamp(work.left + 1, (work.right - width).max(work.left + 1)),
+        y.clamp(work.top, (work.bottom - height).max(work.top)),
+    )
 }
 
 pub enum Content {
@@ -118,22 +138,7 @@ impl Overlay {
                     );
                     let work = crate::frame::work_area(pointer.x, pointer.y);
                     let at = if let Some(placement) = placement {
-                        (
-                            (pointer.x - ((size.0 / 2.0) * scale).round() as i32).clamp(
-                                work.left + 1,
-                                (work.right - (size.0 * scale).round() as i32).max(work.left + 1),
-                            ),
-                            match placement {
-                                Placement::Above => {
-                                    pointer.y - ((20.0 + size.1) * scale).round() as i32
-                                }
-                                Placement::Below => pointer.y + (20.0 * scale).round() as i32,
-                            }
-                            .clamp(
-                                work.top,
-                                (work.bottom - (size.1 * scale).round() as i32).max(work.top),
-                            ),
-                        )
+                        origin(pointer, placement, size, scale)
                     } else {
                         (
                             (pointer.x - ((10.0 + size.0 / 2.0) * scale).round() as i32).clamp(
@@ -320,19 +325,7 @@ impl Overlay {
         let Some(placement) = self.placement else {
             return Ok(());
         };
-        let work = crate::frame::work_area(pointer.x, pointer.y);
-        let x = (pointer.x - (self.size.0 * self.scale / 2.0).round() as i32).clamp(
-            work.left + 1,
-            (work.right - (self.size.0 * self.scale).round() as i32).max(work.left + 1),
-        );
-        let y = match placement {
-            Placement::Above => pointer.y - ((20.0 + self.size.1) * self.scale).round() as i32,
-            Placement::Below => pointer.y + (20.0 * self.scale).round() as i32,
-        }
-        .clamp(
-            work.top,
-            (work.bottom - (self.size.1 * self.scale).round() as i32).max(work.top),
-        );
+        let (x, y) = origin(pointer, placement, self.size, self.scale);
         unsafe {
             SetWindowPos(
                 self.hwnd,

@@ -235,9 +235,9 @@ mod tests {
         keys
     }
 
-    const PREFIXES: [&str; 18] = [
-        "address", "app", "cmd", "column", "context", "count", "empty", "file", "key", "menu",
-        "nav", "pane", "preview", "status", "tab", "tiles", "view", "settings",
+    const PREFIXES: [&str; 19] = [
+        "address", "app", "cmd", "column", "context", "count", "empty", "file", "home", "key",
+        "menu", "nav", "pane", "preview", "status", "tab", "tiles", "view", "settings",
     ];
 
     /// Both catalogs have text for the same keys, every key the code uses, and only those

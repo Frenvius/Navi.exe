@@ -19,6 +19,7 @@ pub enum Kind {
     Icons,
     Drives,
     Gallery,
+    Home,
 }
 
 #[derive(Clone)]
@@ -33,6 +34,8 @@ pub struct Model {
     pub measured: usize,
     pub photos: Vec<crate::shell::gallery::Photo>,
     pub navigation: Vec<crate::app::drives_layout::NavRow>,
+    pub home: crate::app::home::Layout,
+    pub home_labels: Option<Arc<super::home::Labels>>,
     widths: Vec<f32>,
     header_widths: Vec<f32>,
 }
@@ -77,22 +80,21 @@ impl Model {
     }
     pub fn new(folder: &Folder, size: (f32, f32)) -> Option<Self> {
         let path = folder.crumbs.last().map_or("", |crumb| crumb.id.as_str());
-        if ids::same(path, ids::HOME) {
-            return None;
-        }
-        let kind = if ids::same(path, ids::GALLERY) {
+        let kind = if ids::same(path, ids::HOME) {
+            Kind::Home
+        } else if ids::same(path, ids::GALLERY) {
             Kind::Gallery
         } else if ids::same(path, ids::THIS_PC) && folder.view.mode == 7 {
             Kind::Drives
         } else {
             Kind::Icons
         };
-        let mut spec = if kind == Kind::Gallery {
-            grid_layout::spec(3, folder.view.icon_size)?
-        } else {
-            grid_layout::spec(folder.view.mode, folder.view.icon_size)?
+        let mut spec = match kind {
+            Kind::Gallery => grid_layout::spec(3, folder.view.icon_size)?,
+            Kind::Home => grid_layout::spec(3, 48)?,
+            _ => grid_layout::spec(folder.view.mode, folder.view.icon_size)?,
         };
-        if kind != Kind::Gallery && folder.settings.check_boxes {
+        if !matches!(kind, Kind::Gallery | Kind::Home) && folder.settings.check_boxes {
             spec.label_indent = grid_layout::check_indent(&spec);
         }
         let count = folder.order.len();
@@ -103,6 +105,8 @@ impl Model {
             spec,
             size,
             navigation: Vec::new(),
+            home: Default::default(),
+            home_labels: (kind == Kind::Home).then(|| Arc::new(super::home::Labels::load())),
             layout: grid_layout::Layout {
                 empty: Vec::new(),
                 cells: Vec::new(),
@@ -167,6 +171,29 @@ impl Model {
     }
 
     pub fn arrange(&mut self, folder: &Folder) {
+        if self.kind == Kind::Home {
+            let quick = folder.home.quick.min(folder.order.len());
+            let state = crate::app::home::State {
+                quick,
+                ..folder.home
+            };
+            let mut page =
+                crate::app::home::layout(&state, folder.order.len() - quick, self.size.0);
+            self.layout.cells = std::mem::take(&mut page.cells);
+            self.layout.height = page.height;
+            self.layout.width = 0.0;
+            self.layout.columns = page.columns;
+            self.layout.items = self
+                .layout
+                .cells
+                .iter()
+                .map(|cell| (cell[1], cell[1] + cell[3]))
+                .collect();
+            self.layout.items.dedup();
+            self.layout.headers = vec![[0.0, -1.0, -1.0]; folder.order.len()];
+            self.home = page;
+            return;
+        }
         if self.kind == Kind::Gallery {
             let height = (folder.view.icon_size as f32 * 2.0 + 64.0).clamp(96.0, 320.0);
             self.spec.base_h = height;
@@ -397,7 +424,11 @@ pub fn picture(folder: &Folder, row: usize) -> Picture {
             label: None,
         };
     };
-    let size = model.spec.icon as u32;
+    let size = if model.kind == Kind::Home && row >= folder.home.quick {
+        32
+    } else {
+        model.spec.icon as u32
+    };
     let result = if model.kind == Kind::Icons && size == 16 {
         super::icons::small(if entry.icon_pending {
             crate::shell::icons::file_icon(&entry.path)
@@ -407,6 +438,10 @@ pub fn picture(folder: &Folder, row: usize) -> Picture {
     } else {
         let pixels = if model.kind == Kind::Gallery {
             crate::shell::icons::gallery_picture(&entry.path, &entry.absolute, 768)
+        } else if model.kind == Kind::Home && row < folder.home.quick {
+            crate::shell::icons::icon_picture(&entry.path, &entry.absolute, size)
+        } else if model.kind == Kind::Home {
+            crate::shell::icons::thumbnail_or_icon(&entry.path, &entry.absolute, size)
         } else if model.kind == Kind::Drives {
             crate::shell::icons::icon(entry.icon & 0x00ff_ffff, 48)
         } else if folder
@@ -419,6 +454,11 @@ pub fn picture(folder: &Folder, row: usize) -> Picture {
             crate::shell::icons::view_picture(&entry.path, size)
         } else {
             crate::shell::icons::network_picture(&entry.path, &entry.absolute, size)
+        };
+        let pixels = if model.kind == Kind::Home {
+            pixels.or_else(|_| crate::shell::icons::icon(entry.icon & 0x00ff_ffff, size))
+        } else {
+            pixels
         };
         pixels.and_then(super::icons::shared)
     };
@@ -473,6 +513,7 @@ pub struct Assets {
     pictures: HashMap<usize, (Arc<Rgba>, std::rc::Rc<ID2D1Bitmap1>)>,
     checks: details::Assets,
     plates: Option<(bool, Vec<ID2D1Bitmap1>)>,
+    illustration: super::home::Illustration,
 }
 
 pub fn draw(
@@ -497,6 +538,17 @@ pub fn draw(
             .and_then(|picture| picture.image.as_ref())
             .is_some_and(|image| Arc::ptr_eq(image, source))
     });
+    if model.kind == Kind::Home {
+        super::home::draw_page(
+            folder,
+            &mut super::home::Surface {
+                canvas,
+                text: &mut *text,
+                theme,
+            },
+            &mut assets.illustration,
+        )?;
+    }
     for row in model.visible(
         (rect.left, rect.top),
         (rect.right - rect.left, rect.bottom - rect.top),
@@ -518,6 +570,44 @@ pub fn draw(
         let active = state.active && state.has_focus;
         let multi = active && selected && state.selection.selected.len() > 1 && !focused;
         let ready = list.rows.get(&row).and_then(|row| row.picture.as_ref());
+        if model.kind == Kind::Home {
+            let item = super::home::Item {
+                name: &entry.name,
+                cells: list.rows.get(&row).map(|ready| ready.cells.as_slice()),
+                cell: model.layout.cells[row],
+                tile: row < folder.home.quick,
+                hover,
+                hover_button: state.home_button.filter(|_| hover),
+                selected,
+            };
+            super::home::draw_item(
+                &item,
+                model.home.list_columns,
+                &mut super::home::Surface {
+                    canvas,
+                    text: &mut *text,
+                    theme,
+                },
+            )?;
+            if let Some(image) = ready.and_then(|picture| picture.image.as_ref()) {
+                if !assets.pictures.contains_key(&row) {
+                    assets
+                        .pictures
+                        .insert(row, (image.clone(), canvas.shared_icon(image)?));
+                }
+                unsafe {
+                    canvas.context.DrawBitmap(
+                        assets.pictures[&row].1.as_ref(),
+                        Some(&item.picture((image.width as f32, image.height as f32))),
+                        1.0,
+                        D2D1_INTERPOLATION_MODE_LINEAR,
+                        None,
+                        None,
+                    );
+                }
+            }
+            continue;
+        }
         if model.kind == Kind::Gallery {
             if let Some(image) = ready.and_then(|picture| picture.image.as_ref()) {
                 if !assets.pictures.contains_key(&row) {
@@ -1298,12 +1388,13 @@ pub fn set_mode(hwnd: windows::Win32::Foundation::HWND, mode: i32, size: u32) {
 }
 
 const ANIMATION: usize = 23;
+const OVERLAY_HIDE: usize = 24;
 
 pub fn start_animation(hwnd: windows::Win32::Foundation::HWND) {
     let running = super::WINDOW.with(|slot| {
         slot.borrow()
             .as_ref()
-            .is_some_and(|window| window.scroll.gallery_motion.is_some())
+            .is_some_and(|window| window.scroll.wheel_motion.is_some())
     });
     if running {
         super::input::arm(hwnd, ANIMATION, 16);
@@ -1313,20 +1404,52 @@ pub fn start_animation(hwnd: windows::Win32::Foundation::HWND) {
 fn stop_animation(hwnd: windows::Win32::Foundation::HWND) {
     super::WINDOW.with(|slot| {
         if let Some(window) = slot.borrow_mut().as_mut() {
-            window.scroll.gallery_motion = None;
+            window.scroll.wheel_motion = None;
         }
     });
     super::input::stop(hwnd, ANIMATION);
 }
 
+pub fn arm_overlay_hide(hwnd: windows::Win32::Foundation::HWND) {
+    let delay = super::WINDOW.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .and_then(|window| window.scroll.take_hide_delay())
+    });
+    if let Some(delay) = delay {
+        super::input::arm(hwnd, OVERLAY_HIDE, delay);
+    }
+}
+
+fn conceal_overlay(hwnd: windows::Win32::Foundation::HWND) {
+    let (changed, fading) = super::WINDOW.with(|slot| {
+        slot.borrow_mut().as_mut().map_or((false, false), |window| {
+            let changed = window.scroll.conceal();
+            (changed, window.scroll.revealed)
+        })
+    });
+    if changed && fading {
+        super::input::arm(hwnd, OVERLAY_HIDE, 16);
+    } else {
+        super::input::stop(hwnd, OVERLAY_HIDE);
+    }
+    if changed {
+        super::invalidate_view(hwnd);
+    }
+}
+
 pub fn timer(hwnd: windows::Win32::Foundation::HWND, timer: usize) -> bool {
+    if timer == OVERLAY_HIDE {
+        conceal_overlay(hwnd);
+        return true;
+    }
     if timer != ANIMATION {
         return false;
     }
     let (changed, done) = super::WINDOW.with(|slot| {
         slot.borrow_mut().as_mut().map_or((false, true), |window| {
-            let changed = window.scroll.animate_gallery();
-            (changed, window.scroll.gallery_motion.is_none())
+            let changed = window.scroll.animate_wheel();
+            (changed, window.scroll.wheel_motion.is_none())
         })
     });
     if done {
@@ -1334,6 +1457,66 @@ pub fn timer(hwnd: windows::Win32::Foundation::HWND, timer: usize) -> bool {
     }
     if changed {
         super::invalidate_view(hwnd);
+    }
+    true
+}
+
+pub fn home_press(hwnd: windows::Win32::Foundation::HWND, point: (f32, f32)) -> bool {
+    let target = super::WINDOW.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let window = slot.as_mut()?;
+        let view = window.scroll.view?;
+        let folder = window.list.folder.as_ref()?;
+        if !folder
+            .grid
+            .as_ref()
+            .is_some_and(|model| model.kind == Kind::Home)
+        {
+            return None;
+        }
+        let local = (
+            point.0 - view.x + window.scroll.x,
+            point.1 - view.y + window.scroll.y,
+        );
+        let target = super::home::target_at(&mut window.text, folder, local)?;
+        let path = match target {
+            super::home::Target::Button(row, _) => {
+                Some(folder.entries[*folder.order.get(row)?].path.clone())
+            }
+            _ => None,
+        };
+        Some((target, path))
+    });
+    let Some((target, path)) = target else {
+        return false;
+    };
+    use super::home::Target;
+    use crate::app::home::RowButton;
+    let change = |apply: &dyn Fn(&mut super::list::List) -> std::result::Result<(), String>| {
+        let result = super::WINDOW.with(|slot| {
+            slot.borrow_mut()
+                .as_mut()
+                .map_or(Ok(()), |window| apply(&mut window.list))
+        });
+        if let Err(error) = result {
+            eprintln!("home: {error}");
+        }
+        super::chrome::list_focus(hwnd);
+        super::invalidate_view(hwnd);
+    };
+    match target {
+        Target::Button(_, RowButton::More) => {
+            super::tabs_input::list_context(hwnd, point);
+        }
+        Target::Button(_, RowButton::OpenLocation) => {
+            if let Some(Err(error)) =
+                path.map(|path| super::menu_actions::open_location(hwnd, path))
+            {
+                super::fail(error);
+            }
+        }
+        Target::Pivot(pivot) => change(&|list| list.home_pivot(pivot)),
+        Target::Section(section) => change(&|list| list.home_toggle(section)),
     }
     true
 }
@@ -1357,11 +1540,11 @@ pub fn timeline_press(hwnd: windows::Win32::Foundation::HWND, point: (f32, f32))
             if x < view.width - 53.0 || x >= view.width || y < 61.0 || y >= view.height {
                 return false;
             }
-            window.scroll.gallery_motion = None;
+            window.scroll.wheel_motion = None;
             if y < 75.0 || y > view.height - 31.0 {
                 let target = (window.scroll.y + if y < 75.0 { -48.0 } else { 48.0 })
                     .clamp(0.0, view.maximum_y());
-                window.scroll.gallery_motion =
+                window.scroll.wheel_motion =
                     Some((window.scroll.y, target, std::time::Instant::now()));
             } else {
                 let timeline = crate::app::gallery::timeline(

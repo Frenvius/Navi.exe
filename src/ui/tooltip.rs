@@ -621,6 +621,18 @@ fn target(point: (f32, f32), cursor: POINT) -> Option<Tip> {
             .into();
         } else {
             let folder = window.list.folder.as_ref()?;
+            if let Some(button) = window.list.interaction.home_button {
+                use crate::app::home::RowButton;
+                let row = window.list.interaction.hover?;
+                tip.key = format!("home:{row}:{button:?}");
+                tip.style = Style::Xaml(super::menu_tip::Placement::Pointer);
+                tip.text = crate::i18n::tr(match button {
+                    RowButton::OpenLocation => "home.open-location.tip",
+                    RowButton::More => "home.more.tip",
+                })
+                .into();
+                return Some(tip);
+            }
             if !folder.settings.info_tips || window.list.interaction.has_press() {
                 return None;
             }

@@ -379,7 +379,11 @@ pub fn bucket(key: SortKey, e: &ShellEntry, today: &Today, value: Option<&SortVa
                     let ms = number.map_or(0.0, |t| (t - 116_444_736_000_000_000.0) / 10_000.0);
                     date_bucket(ms.max(0.0) as u64, today)
                 }
-                Some(v) => Bucket::new(0, &v.text),
+                Some(v) => Bucket::new(
+                    v.number
+                        .map_or(0, |n| n.clamp(i32::MIN as f64, i32::MAX as f64) as i32),
+                    &v.text,
+                ),
                 None => Bucket::named(-1, UNSPECIFIED),
             }
         }

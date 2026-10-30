@@ -98,11 +98,12 @@ pub fn resolve(path: &str, saved: &ViewState, session: &FolderView) -> ResolvedV
         key: SortKey::Name,
         descending: false,
     });
-    let extra_sorts = if ids::is_library(path) && session.sort.is_none() {
-        sorts.into_iter().skip(1).collect()
-    } else {
-        Vec::new()
-    };
+    let extra_sorts =
+        if (ids::is_library(path) || ids::same(path, ids::HOME)) && session.sort.is_none() {
+            sorts.into_iter().skip(1).collect()
+        } else {
+            Vec::new()
+        };
     let search_ranked = ids::is_search(path)
         && session.sort.is_none()
         && saved

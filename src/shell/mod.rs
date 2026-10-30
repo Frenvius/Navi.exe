@@ -8,6 +8,7 @@ pub mod columns;
 pub mod extmenu;
 pub mod folder_options;
 pub mod gallery;
+pub mod home;
 pub mod icons;
 pub mod jumplist;
 pub mod library;

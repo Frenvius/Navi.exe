@@ -104,12 +104,25 @@ pub fn folders_first(path: &str) -> bool {
         || crate::shell::archive::root(path).is_some()
 }
 
+fn compare_values(a: &SortValue, b: &SortValue, texts: impl FnOnce() -> Ordering) -> Ordering {
+    a.is_empty()
+        .cmp(&b.is_empty())
+        .then_with(|| match (a.number, b.number) {
+            (Some(x), Some(y)) if a.date && b.date => (x / 10_000_000.0)
+                .floor()
+                .partial_cmp(&(y / 10_000_000.0).floor())
+                .unwrap_or(Ordering::Equal),
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            _ => texts(),
+        })
+}
+
 pub fn order(
     entries: &[ShellEntry],
     indices: &mut [usize],
     sort: Sort,
     secondary: &[Sort],
-    values: &HashMap<String, SortValue>,
+    values: &[HashMap<String, SortValue>],
     folders_first: bool,
     path_ties: bool,
 ) {
@@ -123,11 +136,14 @@ pub fn order(
         Vec::new()
     };
     let none = SortValue::default();
+    let value = |slot: usize, entry: &ShellEntry| {
+        values
+            .get(slot)
+            .and_then(|values| values.get(&entry.path))
+            .unwrap_or(&none)
+    };
     let props: Vec<&SortValue> = if sort.key.property().is_some() {
-        entries
-            .iter()
-            .map(|e| values.get(&e.path).unwrap_or(&none))
-            .collect()
+        entries.iter().map(|e| value(0, e)).collect()
     } else {
         Vec::new()
     };
@@ -160,30 +176,25 @@ pub fn order(
                 SortKey::Created => compare_time_ms(a.created, b.created),
                 SortKey::Type => compare_wide(&texts[ia], &texts[ib]),
                 SortKey::Authors | SortKey::Tags | SortKey::Title | SortKey::Prop(_) => {
-                    let (va, vb) = (props[ia], props[ib]);
-                    va.is_empty()
-                        .cmp(&vb.is_empty())
-                        .then_with(|| match (va.number, vb.number) {
-                            (Some(x), Some(y)) if va.date && vb.date => (x / 10_000_000.0)
-                                .floor()
-                                .partial_cmp(&(y / 10_000_000.0).floor())
-                                .unwrap_or(Ordering::Equal),
-                            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-                            _ => compare_wide(&texts[ia], &texts[ib]),
-                        })
+                    compare_values(props[ia], props[ib], || {
+                        compare_wide(&texts[ia], &texts[ib])
+                    })
                 }
             }
         };
         let ord = if sort.descending { ord.reverse() } else { ord };
         ord.then_with(|| {
-            for extra in secondary {
+            for (slot, extra) in secondary.iter().enumerate() {
                 let order = match extra.key {
                     SortKey::Name => by_name(),
                     SortKey::Modified => compare_time_ms(a.modified, b.modified),
                     SortKey::Created => compare_time_ms(a.created, b.created),
                     SortKey::Size => a.size.cmp(&b.size),
                     SortKey::Type => compare_names(&a.type_name, &b.type_name),
-                    _ => Ordering::Equal,
+                    SortKey::Authors | SortKey::Tags | SortKey::Title | SortKey::Prop(_) => {
+                        let (va, vb) = (value(slot + 1, a), value(slot + 1, b));
+                        compare_values(va, vb, || compare_names(&va.text, &vb.text))
+                    }
                 };
                 if order != Ordering::Equal {
                     return if extra.descending {
@@ -265,7 +276,7 @@ mod tests {
                 descending: true,
             },
             &[],
-            &HashMap::new(),
+            &[],
             true,
             false,
         );
@@ -284,7 +295,7 @@ mod tests {
                 descending: false,
             },
             &[],
-            &HashMap::new(),
+            &[],
             true,
             false,
         );
@@ -333,7 +344,7 @@ mod tests {
                 descending: true,
             },
             &[],
-            &HashMap::new(),
+            &[],
             true,
             false,
         );

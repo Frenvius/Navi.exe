@@ -517,6 +517,148 @@ pub fn network_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String>
     }
 }
 
+pub fn icon_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String> {
+    factory_by_id(path, id, size, windows::Win32::UI::Shell::SIIGBF_ICONONLY)
+}
+
+pub fn thumbnail_or_icon(path: &str, id: &[u8], size: u32) -> Result<Rgba, String> {
+    let source = size * 3 / 2;
+    factory_by_id(
+        path,
+        id,
+        source,
+        windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
+    )
+    .or_else(|_| overlaid_icon(path, source).map_or_else(|| icon_picture(path, id, source), Ok))
+    .map(|picture| shrink_to_fit(picture, size))
+}
+
+fn overlaid_icon(path: &str, size: u32) -> Option<Rgba> {
+    let packed = file_icon(path);
+    if packed >> 24 == 0 {
+        return None;
+    }
+    icon(packed, size).ok()
+}
+
+fn shrink_to_fit(picture: Rgba, size: u32) -> Rgba {
+    let longest = picture.width.max(picture.height);
+    if longest <= size {
+        return picture;
+    }
+    let fit = |side: u32| ((side * size) as f32 / longest as f32).round().max(1.0) as u32;
+    hamming_resize(&picture, fit(picture.width), fit(picture.height))
+}
+
+fn hamming_resize(src: &Rgba, w: u32, h: u32) -> Rgba {
+    let premultiplied: Vec<[f32; 4]> = src
+        .pixels
+        .chunks_exact(4)
+        .map(|p| {
+            let a = p[3] as f32 / 255.0;
+            [
+                p[0] as f32 * a,
+                p[1] as f32 * a,
+                p[2] as f32 * a,
+                p[3] as f32,
+            ]
+        })
+        .collect();
+    let rows = resample_rows(&premultiplied, src.width as usize, w as usize);
+    let columns = resample_rows(
+        &transpose(&rows, w as usize),
+        src.height as usize,
+        h as usize,
+    );
+    let pixels = transpose(&columns, h as usize)
+        .into_iter()
+        .flat_map(|[r, g, b, a]| {
+            let a = a.clamp(0.0, 255.0);
+            let straight = |c: f32| {
+                if a > 0.0 {
+                    (c * 255.0 / a).round().clamp(0.0, 255.0) as u8
+                } else {
+                    0
+                }
+            };
+            [straight(r), straight(g), straight(b), a.round() as u8]
+        })
+        .collect();
+    Rgba {
+        width: w,
+        height: h,
+        pixels,
+    }
+}
+
+fn resample_rows(src: &[[f32; 4]], width: usize, out: usize) -> Vec<[f32; 4]> {
+    let scale = width as f32 / out as f32;
+    let stretch = scale.max(1.0);
+    let kernels: Vec<(usize, Vec<f32>)> = (0..out)
+        .map(|x| {
+            let center = (x as f32 + 0.5) * scale;
+            let start = (center - stretch + 0.5).max(0.0) as usize;
+            let end = ((center + stretch + 0.5) as usize).min(width);
+            let weights: Vec<f32> = (start..end)
+                .map(|i| hamming((i as f32 - center + 0.5) / stretch))
+                .collect();
+            let total: f32 = weights.iter().sum();
+            (start, weights.into_iter().map(|w| w / total).collect())
+        })
+        .collect();
+    src.chunks_exact(width)
+        .flat_map(|row| {
+            kernels.iter().map(move |(start, weights)| {
+                let mut pixel = [0f32; 4];
+                for (offset, weight) in weights.iter().enumerate() {
+                    for (channel, value) in pixel.iter_mut().zip(row[start + offset]) {
+                        *channel += value * weight;
+                    }
+                }
+                pixel
+            })
+        })
+        .collect()
+}
+
+fn transpose(src: &[[f32; 4]], width: usize) -> Vec<[f32; 4]> {
+    let height = src.len() / width;
+    (0..width)
+        .flat_map(|x| (0..height).map(move |y| src[y * width + x]))
+        .collect()
+}
+
+fn hamming(x: f32) -> f32 {
+    let x = x.abs();
+    if x == 0.0 {
+        return 1.0;
+    }
+    if x >= 1.0 {
+        return 0.0;
+    }
+    let x = x * std::f32::consts::PI;
+    x.sin() / x * (0.54 + 0.46 * x.cos())
+}
+
+fn factory_by_id(
+    path: &str,
+    id: &[u8],
+    size: u32,
+    only: windows::Win32::UI::Shell::SIIGBF,
+) -> Result<Rgba, String> {
+    com_init();
+    if id.is_empty() {
+        return image_factory(path, size, only, false);
+    }
+    unsafe {
+        let factory = windows::Win32::UI::Shell::SHCreateItemFromIDList::<
+            windows::Win32::UI::Shell::IShellItemImageFactory,
+        >(id.as_ptr().cast())
+        .map_err(|e| e.message())?;
+        factory_picture(&factory, size, only, false)
+    }
+}
+
 fn place_bottom(src: &Rgba, size: u32, inset: u32) -> Rgba {
     let fit = size - 2 * inset + 1;
     let scaled;
@@ -1574,4 +1716,35 @@ fn qualified_bitmap(path: &std::path::Path) -> Option<Rgba> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shrinking_keeps_the_aspect_and_flat_colours() {
+        let picture = Rgba {
+            width: 48,
+            height: 24,
+            pixels: [200, 40, 10, 255].repeat(48 * 24),
+        };
+        let small = shrink_to_fit(picture, 32);
+        assert_eq!((small.width, small.height), (32, 16));
+        assert!(small
+            .pixels
+            .chunks_exact(4)
+            .all(|p| p == [200, 40, 10, 255]));
+    }
+
+    #[test]
+    fn pictures_within_the_size_stay_untouched() {
+        let picture = Rgba {
+            width: 20,
+            height: 32,
+            pixels: [0, 0, 0, 0].repeat(20 * 32),
+        };
+        let kept = shrink_to_fit(picture, 32);
+        assert_eq!((kept.width, kept.height), (20, 32));
+    }
 }

@@ -363,6 +363,24 @@ msgstr "Nenhum item corresponde à pesquisa."
 msgid "empty.home"
 msgstr "Mostraremos seus arquivos recentes e outros conteúdos aqui com base em sua atividade"
 
+msgid "empty.favorites"
+msgstr "Seus favoritos aparecerão aqui."
+
+msgid "empty.favorites-detail"
+msgstr "Selecione um arquivo e selecione Adicionar aos Favoritos para acessar aqui."
+
+msgid "empty.recent"
+msgstr "Sua atividade recente sera mostrada aqui"
+
+msgid "empty.recent-detail"
+msgstr "Você terá acesso rápido aos arquivos usados recentemente aqui."
+
+msgid "home.open-location.tip"
+msgstr "Abrir o local do arquivo"
+
+msgid "home.more.tip"
+msgstr "Confira mais ações para esse arquivo"
+
 msgid "tiles.drives"
 msgstr "Dispositivos e unidades"
 
