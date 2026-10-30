@@ -243,22 +243,73 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     Some(tag[at..].split('"').next()?.to_string())
 }
 
-/// Whether a verb registered for `types` applies to every item. `background` asks for the
-/// folder's own background menu.
-fn applies(types: &[String], paths: &[String], background: bool) -> bool {
+enum ItemKind {
+    Folder,
+    File(Option<String>),
+}
+
+fn item_kinds(paths: &[String]) -> Vec<ItemKind> {
+    paths
+        .iter()
+        .map(|p| {
+            if ops::is_folder(p) {
+                ItemKind::Folder
+            } else {
+                ItemKind::File(
+                    std::path::Path::new(p)
+                        .extension()
+                        .map(|e| format!(".{}", e.to_string_lossy().to_lowercase())),
+                )
+            }
+        })
+        .collect()
+}
+
+fn applies(types: &[String], kinds: &[ItemKind], background: bool) -> bool {
     if background {
         return types.iter().any(|t| t == r"directory\background");
     }
-    paths.iter().all(|p| {
-        if ops::is_folder(p) {
-            types.iter().any(|t| t == "directory")
-        } else {
-            let ext = std::path::Path::new(p)
-                .extension()
-                .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()));
-            types.iter().any(|t| t == "*" || Some(t) == ext.as_ref())
-        }
+    kinds.iter().all(|kind| match kind {
+        ItemKind::Folder => types.iter().any(|t| t == "directory"),
+        ItemKind::File(ext) => types.iter().any(|t| t == "*" || Some(t) == ext.as_ref()),
     })
+}
+
+const ICON_CACHE_LIMIT: usize = 128;
+
+thread_local! {
+    static ICONS: std::cell::RefCell<std::collections::HashMap<String, Option<Rgba>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static UNLOADABLE: std::cell::RefCell<std::collections::HashSet<GUID>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+fn cached_icon(key: &str, load: impl FnOnce() -> Option<Rgba>) -> Option<Rgba> {
+    if let Some(icon) = ICONS.with(|cache| cache.borrow().get(key).cloned()) {
+        return icon;
+    }
+    let icon = load();
+    ICONS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= ICON_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key.to_string(), icon.clone());
+    });
+    icon
+}
+
+fn create_or_stand_in(verb: &Verb, items: &IShellItemArray, kinds: &[ItemKind]) -> Option<Command> {
+    let skip = verb.fallback.is_some() && UNLOADABLE.with(|set| set.borrow().contains(&verb.clsid));
+    if !skip {
+        if let Some(command) = create(verb) {
+            return unsafe { describe(&command, verb.clsid, items, 0) };
+        }
+        if verb.fallback.is_some() {
+            UNLOADABLE.with(|set| set.borrow_mut().insert(verb.clsid));
+        }
+    }
+    stand_in(verb, kinds)
 }
 
 fn create(verb: &Verb) -> Option<IExplorerCommand> {
@@ -495,7 +546,7 @@ unsafe fn describe(
         .GetIcon(items)
         .ok()
         .map(|p| take_pwstr(p))
-        .and_then(|loc| small_icon_at(&loc));
+        .and_then(|loc| cached_icon(&loc, || small_icon_at(&loc)));
     let mut subs = Vec::new();
     let flags = command.GetFlags().map(|f| f as i32).unwrap_or(0);
     if depth == 0 && flags & ECF_HASSUBCOMMANDS.0 != 0 {
@@ -507,7 +558,6 @@ unsafe fn describe(
                     break;
                 }
                 if let Some(sub) = one[0].take() {
-                    // Hidden subcommands keep their place so indexes still match on invoke.
                     let blank = Command {
                         clsid,
                         title: String::new(),
@@ -543,17 +593,12 @@ pub fn commands(paths: &[String], background: bool) -> Vec<Command> {
     let Ok(items) = ops::item_array(paths) else {
         return Vec::new();
     };
+    let kinds = item_kinds(paths);
     let mut out: Vec<Command> = Vec::new();
     for (verb, command) in verbs()
         .iter()
-        .filter(|v| applies(&v.types, paths, background))
-        .filter_map(|v| {
-            match create(v) {
-                Some(c) => unsafe { describe(&c, v.clsid, &items, 0) },
-                None => stand_in(v, paths),
-            }
-            .map(|c| (v, c))
-        })
+        .filter(|v| applies(&v.types, &kinds, background))
+        .filter_map(|v| create_or_stand_in(v, &items, &kinds).map(|c| (v, c)))
     {
         if let Some(group) = &verb.group {
             if let Some(parent) = out
@@ -566,16 +611,7 @@ pub fn commands(paths: &[String], background: bool) -> Vec<Command> {
                     clsid: GUID::zeroed(),
                     title: group.clone(),
                     access_key: String::new(),
-                    icon: super::icons::small_namespace_icon(
-                        r"shell:AppsFolder\Microsoft.OneDriveSync_8wekyb3d8bbwe!OneDrive",
-                    )
-                    .or_else(|| {
-                        super::icons::thumbnail(
-                            r"shell:AppsFolder\Microsoft.OneDriveSync_8wekyb3d8bbwe!OneDrive",
-                            16,
-                        )
-                        .ok()
-                    }),
+                    icon: app_icon("Microsoft.OneDriveSync_8wekyb3d8bbwe!OneDrive"),
                     enabled: true,
                     subs: vec![command],
                     subcommand: None,
@@ -595,7 +631,7 @@ pub fn diagnostics(paths: &[String]) -> Vec<String> {
     };
     verbs()
         .iter()
-        .filter(|v| applies(&v.types, paths, false))
+        .filter(|v| applies(&v.types, &item_kinds(paths), false))
         .map(|v| match create(v) {
             Some(c) => unsafe {
                 format!(
@@ -613,17 +649,24 @@ pub fn diagnostics(paths: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn stand_in(verb: &Verb, paths: &[String]) -> Option<Command> {
+fn app_icon(app: &str) -> Option<Rgba> {
+    let item = format!(r"shell:AppsFolder\{app}");
+    cached_icon(&item, || {
+        super::icons::small_namespace_icon(&item)
+            .or_else(|| super::icons::thumbnail(&item, 16).ok())
+    })
+}
+
+fn stand_in(verb: &Verb, kinds: &[ItemKind]) -> Option<Command> {
     let (_, title, app, program) = FALLBACKS[verb.fallback?];
-    if program == "notepad.exe" && paths.iter().any(|p| ops::is_folder(p)) {
+    if program == "notepad.exe" && kinds.iter().any(|k| matches!(k, ItemKind::Folder)) {
         return None;
     }
     let icon = if app.is_empty() {
-        small_icon_at(&verb.program.to_string_lossy())
+        let program = verb.program.to_string_lossy();
+        cached_icon(&program, || small_icon_at(&program))
     } else {
-        let item = format!(r"shell:AppsFolder\{app}");
-        super::icons::small_namespace_icon(&item)
-            .or_else(|| super::icons::thumbnail(&item, 16).ok())
+        app_icon(app)
     };
     Some(Command {
         clsid: verb.clsid,
