@@ -911,20 +911,21 @@ fn draw(popup: &Popup, canvas: &Canvas, text: &mut TextEngine, theme: &Theme) ->
         }
         rows?;
         for (index, (button, action)) in popup.menu.buttons.iter().enumerate() {
-            let left = 6.0 + index as f32 * 65.0;
+            let left = layout.button_left(index);
+            let width = layout.button_width;
             let top = layout.buttons_top();
             let height = layout.buttons_height - 11.0;
             if popup.hover == Some(Hit::Button(index)) {
                 if popup.keyboard {
                     focus(
                         canvas,
-                        rect(left + 2.0, top + 1.0, 56.0, height - 2.0),
+                        rect(left + 2.0, top + 1.0, width, height - 2.0),
                         theme,
                     );
                 } else {
                     super::address::rounded(
                         canvas,
-                        rect(left, top, 56.0, height),
+                        rect(left, top, width, height),
                         4.0,
                         &theme.subtle_hover,
                     );
@@ -935,41 +936,38 @@ fn draw(popup: &Popup, canvas: &Canvas, text: &mut TextEngine, theme: &Theme) ->
                 popup.menu.items.len() + index,
                 &button.icon,
                 canvas,
-                (left + 20.0, top + 7.0),
+                (left + (width - 16.0) / 2.0, top + 7.0),
                 if button.disabled { 0.36 } else { 1.0 },
             )?;
-            for (line, value) in button_lines(text, &button.label)?.iter().enumerate() {
-                let metrics = text.layout(value, CAPTION, 4096.0)?;
-                let label_width = metrics.advance;
-                let caption_shift = if crate::i18n::language() != "pt-BR" {
-                    match action {
-                        Action::Cut => 2.0 / 3.0,
-                        Action::Share => 0.5,
-                        _ => 0.0,
-                    }
-                } else if index + 1 == popup.menu.buttons.len() {
-                    0.5
+            let label_width = text.layout(&button.label, CAPTION, 4096.0)?.advance;
+            let caption_shift = if crate::i18n::language() != "pt-BR" {
+                match action {
+                    Action::Cut => 2.0 / 3.0,
+                    Action::Share => 0.5,
+                    _ => 0.0,
+                }
+            } else if index + 1 == popup.menu.buttons.len() {
+                0.5
+            } else {
+                0.0
+            };
+            label(
+                canvas,
+                text,
+                &button.label,
+                CAPTION,
+                rect(
+                    left + (width - label_width) / 2.0 + caption_shift,
+                    top + 29.0,
+                    label_width,
+                    16.0,
+                ),
+                if button.disabled {
+                    &theme.text_disabled
                 } else {
-                    0.0
-                };
-                label(
-                    canvas,
-                    text,
-                    value,
-                    CAPTION,
-                    rect(
-                        left + (56.0 - label_width) / 2.0 + caption_shift,
-                        top + 29.0 + line as f32 * 16.0,
-                        label_width,
-                        16.0,
-                    ),
-                    if button.disabled {
-                        &theme.text_disabled
-                    } else {
-                        &theme.text
-                    },
-                )?;
-            }
+                    &theme.text
+                },
+            )?;
             if index > 0 {
                 super::details::fill(
                     canvas,
@@ -1000,35 +998,6 @@ fn draw(popup: &Popup, canvas: &Canvas, text: &mut TextEngine, theme: &Theme) ->
         canvas.context.PopAxisAlignedClip();
     }
     drawn
-}
-
-fn button_lines(text: &mut TextEngine, value: &str) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
-    let mut rest = value;
-    while !rest.is_empty() {
-        let mut end = rest.len();
-        for at in rest
-            .char_indices()
-            .skip(1)
-            .map(|(at, _)| at)
-            .chain(std::iter::once(rest.len()))
-        {
-            if text.layout(&rest[..at], CAPTION, 4096.0)?.advance <= 56.0 {
-                continue;
-            }
-            end = rest[..at]
-                .char_indices()
-                .last()
-                .map_or(at, |(previous, _)| previous);
-            break;
-        }
-        if end == 0 {
-            end = rest.chars().next().unwrap().len_utf8();
-        }
-        lines.push(rest[..end].to_owned());
-        rest = &rest[end..];
-    }
-    Ok(lines)
 }
 
 fn focus(canvas: &Canvas, outer: D2D_RECT_F, theme: &Theme) {
@@ -1711,7 +1680,7 @@ fn adorn(session: &mut Session) -> Result<()> {
             .filter(|(_, (button, _))| !button.disabled && !button.key_tip.is_empty())
         {
             badges.push((
-                29.0 + index as f32 * 65.0,
+                popup.layout.button_left(index) + popup.layout.button_width / 2.0 - 5.0,
                 popup.layout.buttons_top() - 26.0,
                 button.key_tip.clone(),
             ));
@@ -1743,7 +1712,12 @@ fn adorn(session: &mut Session) -> Result<()> {
                 let scale = unsafe { GetDpiForWindow(session.owner) } as f32 / 96.0;
                 let pointer = if popup.keyboard {
                     POINT {
-                        x: popup.at.0 + ((46.0 + index as f32 * 65.0) * scale).round() as i32,
+                        x: popup.at.0
+                            + ((popup.layout.button_left(index)
+                                + popup.layout.button_width / 2.0
+                                + 12.0)
+                                * scale)
+                                .round() as i32,
                         y: popup.at.1 + ((popup.layout.buttons_top() + 3.0) * scale).round() as i32,
                     }
                 } else {

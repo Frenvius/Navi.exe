@@ -33,6 +33,7 @@ pub struct Layout {
     pub overflow: bool,
     pub context: bool,
     pub buttons_height: f32,
+    pub button_width: f32,
     pub buttons_bottom: bool,
     pub shortcut_width: f32,
 }
@@ -126,13 +127,14 @@ impl Layout {
             shortcut_width = shortcut_width.ceil();
         }
         let mut buttons_height = 0.0;
+        let mut button_width: f32 = 56.0;
         if !menu.buttons.is_empty() {
-            width = width.max(menu.buttons.len() as f32 * 65.0 + 9.0);
-            let wrapped = menu.buttons.iter().any(|(button, _)| {
-                text.layout(&button.label, CAPTION, 4096.0)
-                    .is_ok_and(|label| label.advance > 56.0)
-            });
-            buttons_height = if wrapped { 72.0 } else { 59.0 };
+            for (button, _) in &menu.buttons {
+                let label = text.layout(&button.label, CAPTION, 4096.0)?.advance;
+                button_width = button_width.max((label + 8.0).ceil());
+            }
+            width = width.max(menu.buttons.len() as f32 * (button_width + 9.0) + 9.0);
+            buttons_height = 59.0;
         }
         let mut top = padding + buttons_height;
         let mut rows = Vec::with_capacity(menu.items.len());
@@ -154,9 +156,14 @@ impl Layout {
             overflow,
             context: !dropdown,
             buttons_height,
+            button_width,
             buttons_bottom: false,
             shortcut_width,
         })
+    }
+
+    pub fn button_left(&self, index: usize) -> f32 {
+        6.0 + index as f32 * (self.button_width + 9.0)
     }
 
     pub fn buttons_top(&self) -> f32 {
@@ -211,12 +218,14 @@ impl Layout {
             && point.1 >= self.buttons_top()
             && point.1 < self.buttons_top() + self.buttons_height - 11.0
         {
-            let index = ((point.0 - 5.0) / 65.0).floor() as usize;
-            let left = 6.0 + index as f32 * 65.0;
+            let index = ((point.0 - 5.0) / (self.button_width + 9.0)).floor() as usize;
+            let left = self.button_left(index);
             return menu
                 .buttons
                 .get(index)
-                .filter(|(button, _)| !button.disabled && point.0 >= left && point.0 < left + 56.0)
+                .filter(|(button, _)| {
+                    !button.disabled && point.0 >= left && point.0 < left + self.button_width
+                })
                 .map(|_| Hit::Button(index));
         }
         let (top, bottom) = self.row_area();

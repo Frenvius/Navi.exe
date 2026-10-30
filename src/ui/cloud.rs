@@ -129,6 +129,7 @@ impl State {
             overflow: false,
             context: false,
             buttons_height: 0.0,
+            button_width: 0.0,
             buttons_bottom: false,
             shortcut_width: 0.0,
         }
