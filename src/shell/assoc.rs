@@ -1,5 +1,3 @@
-//! "Abrir com": the apps registered for a file type, as Explorer lists them.
-
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::UI::Shell::{IAssocHandler, SHAssocEnumHandlers, ASSOC_FILTER_RECOMMENDED};
 
@@ -59,28 +57,36 @@ fn default_app_name(ext: &str) -> Option<String> {
     Some(String::from_utf16_lossy(&buf[..n]))
 }
 
-/// Whether the file type of `path` has the verb ("runas" for programs and scripts).
 pub fn has_verb(path: &str, verb: &str) -> bool {
     use windows::Win32::UI::Shell::{
-        AssocQueryStringW, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_COMMAND,
+        AssocQueryStringW, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_PROGID,
     };
+    use winreg::{enums::HKEY_CLASSES_ROOT, RegKey};
     let Some(ext) = std::path::Path::new(path).extension() else {
         return false;
     };
     let ext = wide(&format!(".{}", ext.to_string_lossy()));
-    let verb = wide(verb);
-    let mut len = 0u32;
-    unsafe {
+    let mut buf = [0u16; 260];
+    let mut len = buf.len() as u32;
+    let found = unsafe {
         AssocQueryStringW(
             ASSOCF_INIT_IGNOREUNKNOWN,
-            ASSOCSTR_COMMAND,
+            ASSOCSTR_PROGID,
             PCWSTR(ext.as_ptr()),
-            PCWSTR(verb.as_ptr()),
-            None,
+            PCWSTR::null(),
+            Some(PWSTR(buf.as_mut_ptr())),
             &mut len,
         )
         .is_ok()
+    };
+    if !found {
+        return false;
     }
+    let end = buf.iter().position(|c| *c == 0).unwrap_or(0);
+    let progid = String::from_utf16_lossy(&buf[..end]);
+    RegKey::predef(HKEY_CLASSES_ROOT)
+        .open_subkey(format!(r"{progid}\shell\{verb}"))
+        .is_ok()
 }
 
 /// The recommended apps for the extension of `path`, the default one first.
