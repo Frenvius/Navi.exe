@@ -369,14 +369,21 @@ impl Assets {
         let scale = atlas.dpi as f32 / 96.0;
         let padding = atlas.padding as f32 / scale;
         let side = atlas.cell as f32 / scale;
+        let mut transform = Default::default();
+        unsafe {
+            canvas.context.GetTransform(&mut transform);
+        }
+        let snap = |value: f32, shift: f32| ((value + shift) * scale).round() / scale - shift;
+        let left = snap(point.0 - padding, transform.M31);
+        let top = snap(point.1 - padding, transform.M32);
         unsafe {
             canvas.context.DrawBitmap(
                 &atlas.bitmap,
                 Some(&D2D_RECT_F {
-                    left: point.0 - padding,
-                    top: point.1 - padding,
-                    right: point.0 - padding + side,
-                    bottom: point.1 - padding + side,
+                    left,
+                    top,
+                    right: left + side,
+                    bottom: top + side,
                 }),
                 1.0,
                 D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
