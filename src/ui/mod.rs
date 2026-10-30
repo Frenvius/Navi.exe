@@ -456,6 +456,9 @@ unsafe extern "system" fn window_proc(
     ) {
         tooltip::suppress(hwnd);
     }
+    if message != 0 && message == shell_windows::taskbar_created() {
+        shell_windows::restart(hwnd);
+    }
     if message == WM_ACTIVATE {
         if wparam.0 as u32 & 0xffff == WA_INACTIVE {
             tooltip::dismiss(hwnd);
@@ -504,8 +507,8 @@ unsafe extern "system" fn window_proc(
             location::changed(hwnd, wparam.0, lparam.0);
             return LRESULT(0);
         }
-        shell_windows::SELECT => {
-            shell_windows::selected(hwnd);
+        shell_windows::REQUEST => {
+            shell_windows::requested(hwnd);
             return LRESULT(0);
         }
         navigation::CHANGED => {
