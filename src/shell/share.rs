@@ -149,7 +149,7 @@ mod tests {
     fn shared_file_package_contains_exact_selected_paths_and_rejects_missing_files() {
         std::thread::spawn(|| -> Result<()> {
             let _runtime = Runtime::initialize(RO_INIT_MULTITHREADED)?;
-            let root = std::env::temp_dir().join(format!("sw-native-share-{}", std::process::id()));
+            let root = std::env::temp_dir().join(format!("navi-share-{}", std::process::id()));
             std::fs::create_dir(&root).unwrap();
             let paths = [root.join("alpha.txt"), root.join("beta.txt")]
                 .map(|path| path.to_string_lossy().into_owned());

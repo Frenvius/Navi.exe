@@ -4,7 +4,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[test]
 fn streaming_search_uses_the_list_worker_and_rejects_cancelled_batches() {
-    let root = std::env::temp_dir().join(format!("sw-native-search18-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("navi-search18-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("native18 alpha.txt"), b"owned small search dummy").unwrap();
     std::fs::write(root.join("native18 large.txt"), vec![b'x'; 4096]).unwrap();

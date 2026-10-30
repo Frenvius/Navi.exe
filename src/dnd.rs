@@ -796,7 +796,7 @@ mod drop_tests {
             .unwrap()
             .as_nanos();
         let root =
-            std::env::temp_dir().join(format!("sw-native-drop17-{}-{unique}", std::process::id()));
+            std::env::temp_dir().join(format!("navi-drop17-{}-{unique}", std::process::id()));
         let source = root.join("Source");
         let first = root.join("First");
         let destination = root.join("Destination");

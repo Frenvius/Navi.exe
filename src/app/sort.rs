@@ -388,8 +388,7 @@ pub fn updated_order(
 mod notification_tests {
     #[test]
     fn external_create_appends_and_rename_retains_its_slot_until_resort() {
-        let root =
-            std::env::temp_dir().join(format!("sw-native-live-order-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-live-order-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let paths = ["a.txt", "b.txt", "c.txt"].map(|name| root.join(name));
         for path in &paths {

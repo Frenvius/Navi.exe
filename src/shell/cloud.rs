@@ -353,11 +353,11 @@ mod tests {
         .unwrap();
         let signal = Arc::downgrade(&sender.0.signal);
         sender
-            .send(Request::Path(r"C:\sw-native-cloud-idle-test".into()))
+            .send(Request::Path(r"C:\navi-cloud-idle-test".into()))
             .unwrap();
         assert_eq!(
             received.recv_timeout(Duration::from_secs(5)).unwrap(),
-            r"C:\sw-native-cloud-idle-test"
+            r"C:\navi-cloud-idle-test"
         );
         let clone = sender.clone();
         drop(sender);

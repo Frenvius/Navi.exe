@@ -2306,7 +2306,7 @@ mod tests {
     #[test]
     fn column_filter_uses_all_entries_and_clears_a_resumed_filtered_view() {
         use super::{sort, List, Worker, HWND};
-        let root = std::env::temp_dir().join(format!("sw-native-filter19-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-filter19-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let files = [
             root.join("alpha.txt"),
@@ -2459,7 +2459,7 @@ mod tests {
         use super::*;
         use windows::core::w;
         use windows::Win32::UI::WindowsAndMessaging::*;
-        let root = std::env::temp_dir().join(format!("sw-native-worker-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-worker-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let paths = [root.join("first"), root.join("second")];
         for path in &paths {
@@ -2525,7 +2525,7 @@ mod tests {
     fn pasted_selection_waits_for_every_created_item_and_then_updates_together() {
         use super::*;
         let root =
-            std::env::temp_dir().join(format!("sw-native-paste-selection-{}", std::process::id()));
+            std::env::temp_dir().join(format!("navi-paste-selection-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let initial = load(root.to_str().unwrap(), None).unwrap();
         let (sender, updates) = mpsc::channel();
@@ -2600,8 +2600,7 @@ mod tests {
     #[test]
     fn grouped_home_and_end_select_items_while_up_can_select_a_header() {
         use super::*;
-        let root =
-            std::env::temp_dir().join(format!("sw-native-group-keys-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-group-keys-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("alpha.txt"), b"a").unwrap();
         std::fs::write(root.join("beta.txt"), b"b").unwrap();
@@ -2636,8 +2635,7 @@ mod tests {
     #[test]
     fn collapsing_icon_groups_retains_labels_and_never_enters_details_rendering() {
         use super::*;
-        let root =
-            std::env::temp_dir().join(format!("sw-native-grid-collapse-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-grid-collapse-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("alpha.txt"), b"a").unwrap();
         std::fs::write(root.join("beta.txt"), b"b").unwrap();
@@ -2674,8 +2672,7 @@ mod tests {
     #[test]
     fn icon_typeahead_aligns_an_offscreen_match_at_the_top() {
         use super::*;
-        let root =
-            std::env::temp_dir().join(format!("sw-native-grid-typeahead-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-grid-typeahead-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         for name in ["alpha.txt", "beta.txt", "gamma.txt"] {
             std::fs::write(root.join(name), b"a").unwrap();
@@ -2705,7 +2702,7 @@ mod tests {
     #[test]
     fn live_data_survives_a_newer_sort_without_accepting_stale_cells() {
         use super::*;
-        let root = std::env::temp_dir().join(format!("sw-native-live-sort-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-live-sort-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("alpha.txt"), b"a").unwrap();
         let mut initial = load(root.to_str().unwrap(), None).unwrap();
@@ -2787,7 +2784,7 @@ mod tests {
         use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER};
         use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
         crate::shell::com_init();
-        let root = std::env::temp_dir().join(format!("sw-native-overlay-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-overlay-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let target = root.join("target.txt");
         let shortcut = root.join("shortcut.lnk");
@@ -2886,7 +2883,7 @@ mod tests {
         use super::*;
         assert!(shell::icons::icon(u32::MAX, 16).is_err());
         let root = std::env::temp_dir().join(format!(
-            "sw-native-icon-{}-{}",
+            "navi-icon-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

@@ -1,8 +1,3 @@
-//! Native Folder Options with the current Slint view supplied by a hidden ExplorerBrowser.
-//! Windows owns the pages, confirmation, serialized default and bag invalidation.
-//! ExplorerBrowser's IShellBrowserService::SetAsDefFolderSettings is E_NOTIMPL.
-//! After the native confirmation returns Yes, forward CGID_DefView/0 to its view,
-//! exactly the command the full Explorer frame sends. Never write/delete bags here.
 use super::{viewstate::ViewState, Pidl};
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::{
@@ -52,8 +47,6 @@ unsafe extern "system" fn position_message(
     }
     result
 }
-// All borrowed pointers and hooks stay on this dialog's STA and expire before its
-// IShellView/context are dropped. The Slint UI never touches these COM objects.
 thread_local! {
 static SHEET_OWNER:std::cell::Cell<isize>=const{std::cell::Cell::new(0)};
 static VIEW:std::cell::Cell<*const IShellView>=const{std::cell::Cell::new(std::ptr::null())};

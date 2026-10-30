@@ -860,8 +860,7 @@ mod native_update_tests {
 
     #[test]
     fn single_entry_refresh_keeps_shell_metadata_without_enumerating_siblings() {
-        let root =
-            std::env::temp_dir().join(format!("sw-native-single-entry-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("navi-single-entry-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         let file = root.join("native-file.txt");
         std::fs::write(&file, b"before").unwrap();
