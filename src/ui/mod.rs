@@ -458,6 +458,7 @@ unsafe extern "system" fn window_proc(
         if wparam.0 as u32 & 0xffff == WA_INACTIVE {
             tooltip::dismiss(hwnd);
         } else {
+            launch::activated(hwnd);
             settings::refresh(hwnd);
         }
     }

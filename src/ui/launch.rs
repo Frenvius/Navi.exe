@@ -8,6 +8,15 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const READY: u32 = WM_APP + 46;
 const ACTIVATE: usize = 81;
 
+pub fn activated(hwnd: HWND) {
+    let time = unsafe { windows::Win32::System::SystemInformation::GetTickCount64() };
+    if let Err(error) = unsafe {
+        SetPropW(hwnd, w!("NaviLastActivated"), Some(HANDLE(time.max(1) as _)))
+    } {
+        eprintln!("launch activation order: {error}");
+    }
+}
+
 thread_local! {
     static ROUTES: RefCell<HashMap<usize, Vec<String>>> = Default::default();
     static MAILBOX: RefCell<HashMap<usize, VecDeque<Request>>> = Default::default();
@@ -197,4 +206,48 @@ pub fn close(hwnd: HWND) {
     ROUTES.with(|routes| routes.borrow_mut().remove(&(hwnd.0 as usize)));
     MAILBOX.with(|mailbox| mailbox.borrow_mut().remove(&(hwnd.0 as usize)));
     RETRIES.with(|retries| retries.borrow_mut().remove(&(hwnd.0 as usize)));
+    if !unsafe { GetPropW(hwnd, w!("NaviLastActivated")) }.is_invalid() {
+        if let Err(error) = unsafe { RemovePropW(hwnd, w!("NaviLastActivated")) } {
+            eprintln!("launch activation stamp cleanup: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activation_stamp_is_owned_by_window_lifetime() {
+        let hwnd = unsafe {
+            CreateWindowExW(
+                Default::default(),
+                w!("STATIC"),
+                w!("NaviLaunchLifetimeTest"),
+                Default::default(),
+                0,
+                0,
+                1,
+                1,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
+        struct Window(HWND);
+        impl Drop for Window {
+            fn drop(&mut self) {
+                if let Err(error) = unsafe { DestroyWindow(self.0) } {
+                    eprintln!("launch lifetime test cleanup: {error}");
+                }
+            }
+        }
+        let _window = Window(hwnd);
+        activated(hwnd);
+        assert!(unsafe { GetPropW(hwnd, w!("NaviLastActivated")) }.0 as usize > 0);
+        close(hwnd);
+        assert!(unsafe { GetPropW(hwnd, w!("NaviLastActivated")) }.is_invalid());
+    }
 }

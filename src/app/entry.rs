@@ -36,6 +36,23 @@ pub struct Launch {
     pub select: Option<String>,
     pub restore: Option<String>,
 }
+impl Launch {
+    fn delivery_mode(&self, preferences: super::launch_preferences::Preferences) -> Mode {
+        use super::launch_preferences::{Destination, Source};
+        if self.mode != Mode::Default && !(self.shell_open && self.mode == Mode::Reuse) {
+            return self.mode;
+        }
+        let source = if self.shell_open && self.path.is_none() {
+            Source::WinE
+        } else {
+            Source::External
+        };
+        match preferences.destination(source) {
+            Destination::NewTab => Mode::NewTab,
+            Destination::NewWindow => Mode::NewWindow,
+        }
+    }
+}
 thread_local! {static OPTIONS:RefCell<Launch>=RefCell::new(Launch::default());static STARTUP:RefCell<Option<Lock>>=const{RefCell::new(None)};}
 pub fn options() -> Launch {
     OPTIONS.with(|o| o.borrow().clone())
@@ -201,7 +218,19 @@ pub fn parse(args: &[String]) -> Result<Launch, String> {
                 || lower == "/newtab"
                 || lower.starts_with("/newtab,"))
         {
-            result.mode = Mode::NewWindow;
+            let mode = if lower.starts_with("/n,") {
+                Some(Mode::NewWindow)
+            } else if lower == "/newtab" || lower.starts_with("/newtab,") {
+                Some(Mode::NewTab)
+            } else {
+                None
+            };
+            if let Some(mode) = mode {
+                if result.mode != Mode::Default && result.mode != mode {
+                    return Err("Conflicting launch modes".into());
+                }
+                result.mode = mode;
+            }
             value = arg
                 .split_once(',')
                 .map(|(_, v)| v.to_string())
@@ -333,6 +362,9 @@ fn dispatch(launch: &Launch) -> bool {
         if peers.is_empty() {
             return false;
         }
+        peers.sort_by_cached_key(|hwnd| {
+            std::cmp::Reverse(GetPropW(*hwnd, w!("NaviLastActivated")).0 as usize)
+        });
         let Ok(source) = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
@@ -464,7 +496,7 @@ pub fn start() -> Result<bool, String> {
         eprintln!("{USAGE}");
         return Ok(true);
     }
-    let launch = parse(&args)?;
+    let mut launch = parse(&args)?;
     if launch.shell_open {
         if let Some(path) = launch.path.as_deref() {
             if !shell_supported(path) {
@@ -472,6 +504,13 @@ pub fn start() -> Result<bool, String> {
                 return Ok(true);
             }
         }
+    }
+    if launch.restore.is_none() {
+        let preferences = super::launch_preferences::Preferences::read().unwrap_or_else(|error| {
+            eprintln!("launch preferences: {error}");
+            Default::default()
+        });
+        launch.mode = launch.delivery_mode(preferences);
     }
     OPTIONS.with(|o| *o.borrow_mut() = launch.clone());
     STARTUP.with(|g| *g.borrow_mut() = Lock::get());
@@ -486,6 +525,64 @@ mod tests {
     use super::*;
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+    #[test]
+    fn external_and_win_e_destinations_are_independent_and_explicit_modes_win() {
+        use super::super::launch_preferences::{Destination, Preferences};
+        for external in [Destination::NewTab, Destination::NewWindow] {
+            for win_e in [Destination::NewTab, Destination::NewWindow] {
+                let preferences = Preferences { external, win_e };
+                let mode = |destination| match destination {
+                    Destination::NewTab => Mode::NewTab,
+                    Destination::NewWindow => Mode::NewWindow,
+                };
+                for arguments in [
+                    vec!["--shell-open", "--reuse-window", r"C:\Windows"],
+                    vec!["--reuse-window", "--shell-open", r"C:\Windows"],
+                    vec!["--shell-open", r"C:\Windows"],
+                    vec![r"C:\Windows"],
+                    vec![r"/e,C:\Windows"],
+                    vec!["/e", r"C:\Windows"],
+                ] {
+                    assert_eq!(
+                        parse(&args(&arguments)).unwrap().delivery_mode(preferences),
+                        mode(external)
+                    );
+                }
+                for arguments in [vec!["--shell-open", "--reuse-window"], vec!["--shell-open"]] {
+                    assert_eq!(
+                        parse(&args(&arguments)).unwrap().delivery_mode(preferences),
+                        mode(win_e)
+                    );
+                }
+                for (arguments, expected) in [
+                    (vec!["--reuse-window", r"C:\Windows"], Mode::Reuse),
+                    (vec!["--new-tab", r"C:\Windows"], Mode::NewTab),
+                    (vec![r"/newtab,C:\Windows"], Mode::NewTab),
+                    (vec![r"/n,C:\Windows"], Mode::NewWindow),
+                    (vec!["--shell-open", "--new-tab"], Mode::NewTab),
+                    (
+                        vec!["--shell-open", "--new-window", r"C:\Windows"],
+                        Mode::NewWindow,
+                    ),
+                ] {
+                    assert_eq!(
+                        parse(&args(&arguments)).unwrap().delivery_mode(preferences),
+                        expected
+                    );
+                }
+            }
+        }
+        let selected = parse(&args(&[
+            "--shell-open",
+            "--reuse-window",
+            "--select",
+            r"C:\Users\José\selected.txt",
+        ]))
+        .unwrap();
+        assert_eq!(selected.delivery_mode(Preferences::default()), Mode::NewTab);
+        assert_eq!(selected.path.as_deref(), Some(r"C:\Users\José"));
+        assert_eq!(selected.select.as_deref(), Some(r"C:\Users\José\selected.txt"));
     }
     #[test]
     fn folder_launch_modes_root_selection_and_native_legacy_forms() {

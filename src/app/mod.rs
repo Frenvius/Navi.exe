@@ -16,6 +16,7 @@ pub mod header;
 pub(crate) mod home;
 pub mod ids;
 pub(crate) mod library_view;
+pub(crate) mod launch_preferences;
 pub(crate) mod menu_chrome;
 pub(crate) mod menu_model;
 pub mod navtree;

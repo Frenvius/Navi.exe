@@ -414,6 +414,27 @@ msgstr "Configurações"
 msgid "settings.general"
 msgstr "Geral"
 
+msgid "settings.open.external.title"
+msgstr "Pastas abertas de fora do Navi"
+
+msgid "settings.open.external.description"
+msgstr "Escolha onde abrir pastas da área de trabalho, atalhos, outros aplicativos e da lista de atalhos."
+
+msgid "settings.open.win-e.title"
+msgstr "Win+E"
+
+msgid "settings.open.win-e.description"
+msgstr "Escolha onde Win+E abre quando o Navi é o gerenciador de arquivos padrão."
+
+msgid "settings.open.new-tab"
+msgstr "Nova aba"
+
+msgid "settings.open.new-window"
+msgstr "Nova janela"
+
+msgid "settings.open.error"
+msgstr "Não foi possível ler ou salvar as preferências de abertura: {}"
+
 msgid "settings.default.title"
 msgstr "Definir como gerenciador de arquivos padrão"
 

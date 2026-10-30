@@ -6,6 +6,7 @@ use super::{
     theme::Theme,
     WINDOW,
 };
+use crate::app::launch_preferences::{Destination, Preferences, Source};
 use windows::{
     core::Result,
     Win32::{Foundation::HWND, Graphics::Direct2D::Common::*},
@@ -16,7 +17,15 @@ pub enum Target {
     Section,
     Toggle,
     Restore,
+    OpenIn(Source, Destination),
 }
+
+const OPEN_CHOICES: [Target; 4] = [
+    Target::OpenIn(Source::External, Destination::NewTab),
+    Target::OpenIn(Source::External, Destination::NewWindow),
+    Target::OpenIn(Source::WinE, Destination::NewTab),
+    Target::OpenIn(Source::WinE, Destination::NewWindow),
+];
 
 #[derive(Default)]
 pub struct State {
@@ -25,6 +34,12 @@ pub struct State {
     enabled: bool,
     recovery: bool,
     error: String,
+    opening: Preferences,
+    opening_error: String,
+    opening_error_height: f32,
+    opening_cards: [D2D_RECT_F; 2],
+    opening_title_heights: [f32; 2],
+    opening_description_heights: [f32; 2],
     size: (f32, f32),
     card: D2D_RECT_F,
     title_height: f32,
@@ -67,12 +82,25 @@ impl State {
                     .max(1.0),
                 28.0,
             ),
+            Target::OpenIn(source, destination) => {
+                let card = self.opening_cards[source as usize];
+                let width = ((card.right - card.left - 48.0) / 2.0).max(1.0);
+                let x = card.left
+                    + 20.0
+                    + if destination == Destination::NewWindow {
+                        width + 8.0
+                    } else {
+                        0.0
+                    };
+                rect(x, card.bottom - 48.0, width, 32.0)
+            }
         }
     }
     fn hit(&self, point: (f32, f32)) -> Option<Target> {
         let point = (point.0, point.1 - 88.0);
         [Target::Section, Target::Toggle, Target::Restore]
             .into_iter()
+            .chain(OPEN_CHOICES)
             .find(|&target| {
                 if target == Target::Restore && (!self.recovery || self.enabled) {
                     return false;
@@ -121,10 +149,59 @@ impl State {
             } else {
                 0.0
             };
-        self.maximum = (116.0 + height - size.1).max(0.0);
+        let mut top = 84.0 + height + 12.0;
+        for source in [Source::External, Source::WinE] {
+            let index = source as usize;
+            let (title, description) = opening_labels(source);
+            self.opening_title_heights[index] = text
+                .layout(
+                    crate::i18n::tr(title),
+                    label(14.0, 400).with_wrap(),
+                    (width - 40.0).max(1.0),
+                )?
+                .height;
+            self.opening_description_heights[index] = text
+                .layout(
+                    crate::i18n::tr(description),
+                    label(12.0, 400).with_wrap(),
+                    (width - 40.0).max(1.0),
+                )?
+                .height;
+            let card_height =
+                88.0 + self.opening_title_heights[index] + self.opening_description_heights[index];
+            self.opening_cards[index] = rect(x, top, width, card_height);
+            top += card_height + 12.0;
+        }
+        self.opening_error_height = if self.opening_error.is_empty() {
+            0.0
+        } else {
+            text.layout(
+                &self.opening_error,
+                label(12.0, 400).with_wrap(),
+                (width - 40.0).max(1.0),
+            )?
+            .height
+        };
+        self.maximum = (top + self.opening_error_height + 20.0 - size.1).max(0.0);
         self.offset = self.offset.clamp(0.0, self.maximum);
         self.card = rect(x, 84.0 - self.offset, width, height);
+        for card in &mut self.opening_cards {
+            card.top -= self.offset;
+            card.bottom -= self.offset;
+        }
         Ok(())
+    }
+}
+fn opening_labels(source: Source) -> (&'static str, &'static str) {
+    match source {
+        Source::External => (
+            "settings.open.external.title",
+            "settings.open.external.description",
+        ),
+        Source::WinE => (
+            "settings.open.win-e.title",
+            "settings.open.win-e.description",
+        ),
     }
 }
 const fn label(size: f32, weight: u16) -> TextStyle {
@@ -319,6 +396,150 @@ pub fn draw(
             &theme.text,
         )?;
     }
+    for source in [Source::External, Source::WinE] {
+        let index = source as usize;
+        let card = state.opening_cards[index];
+        rounded(canvas, card, 4.0, &theme.card_border);
+        rounded(
+            canvas,
+            rect(
+                card.left + 1.0,
+                card.top + 1.0,
+                card.right - card.left - 2.0,
+                card.bottom - card.top - 2.0,
+            ),
+            3.0,
+            &theme.settings_card,
+        );
+        let (title, description) = opening_labels(source);
+        paragraph(
+            canvas,
+            text,
+            crate::i18n::tr(title),
+            label(14.0, 400),
+            rect(
+                card.left + 20.0,
+                card.top + 16.0,
+                card.right - card.left - 40.0,
+                state.opening_title_heights[index],
+            ),
+            &theme.text,
+        )?;
+        paragraph(
+            canvas,
+            text,
+            crate::i18n::tr(description),
+            label(12.0, 400),
+            rect(
+                card.left + 20.0,
+                card.top + 22.0 + state.opening_title_heights[index],
+                card.right - card.left - 40.0,
+                state.opening_description_heights[index],
+            ),
+            &theme.text_secondary,
+        )?;
+        for destination in [Destination::NewTab, Destination::NewWindow] {
+            let target = Target::OpenIn(source, destination);
+            let bounds = state.bounds(target);
+            let selected = state.opening.destination(source) == destination;
+            rounded(
+                canvas,
+                bounds,
+                4.0,
+                if selected {
+                    &theme.accent
+                } else {
+                    &theme.control_border
+                },
+            );
+            rounded(
+                canvas,
+                rect(
+                    bounds.left + 1.0,
+                    bounds.top + 1.0,
+                    bounds.right - bounds.left - 2.0,
+                    30.0,
+                ),
+                3.0,
+                &theme.settings_card,
+            );
+            if state.pressed == Some(target) || state.hover == Some(target) {
+                rounded(
+                    canvas,
+                    rect(
+                        bounds.left + 1.0,
+                        bounds.top + 1.0,
+                        bounds.right - bounds.left - 2.0,
+                        30.0,
+                    ),
+                    3.0,
+                    if state.pressed == Some(target) {
+                        &theme.control_pressed
+                    } else {
+                        &theme.control_hover
+                    },
+                );
+            }
+            rounded(
+                canvas,
+                rect(bounds.left + 12.0, bounds.top + 9.0, 14.0, 14.0),
+                7.0,
+                if selected {
+                    &theme.accent
+                } else {
+                    &theme.text_secondary
+                },
+            );
+            rounded(
+                canvas,
+                rect(bounds.left + 13.0, bounds.top + 10.0, 12.0, 12.0),
+                6.0,
+                &theme.settings_card,
+            );
+            if selected {
+                rounded(
+                    canvas,
+                    rect(bounds.left + 16.0, bounds.top + 13.0, 6.0, 6.0),
+                    3.0,
+                    &theme.accent,
+                );
+            }
+            let key = match destination {
+                Destination::NewTab => "settings.open.new-tab",
+                Destination::NewWindow => "settings.open.new-window",
+            };
+            super::details::draw_line(
+                canvas,
+                text,
+                crate::i18n::tr(key),
+                label(12.0, 400),
+                rect(
+                    bounds.left + 36.0,
+                    bounds.top + 5.0,
+                    (bounds.right - bounds.left - 44.0).max(1.0),
+                    22.0,
+                ),
+                0.0,
+                &theme.text,
+            )?;
+        }
+    }
+    if !state.opening_error.is_empty() {
+        let card = state.opening_cards[1];
+        paragraph(
+            canvas,
+            text,
+            &state.opening_error,
+            label(12.0, 400),
+            rect(
+                card.left + 20.0,
+                card.bottom + 12.0,
+                card.right - card.left - 40.0,
+                state.opening_error_height,
+            ),
+            &theme.settings_error,
+        )?;
+    }
     if cues {
         if let Focus::Settings(target) = focus {
             let r = state.bounds(target);
@@ -376,13 +597,20 @@ pub fn refresh(hwnd: HWND) {
         return;
     }
     let status = crate::app::default_manager::status();
+    let opening = Preferences::read();
     let changed = WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(window) = slot.as_mut() else {
             return false;
         };
         let s = &mut window.settings;
-        let before = (s.enabled, s.recovery, s.error.clone());
+        let before = (
+            s.enabled,
+            s.recovery,
+            s.error.clone(),
+            s.opening,
+            s.opening_error.clone(),
+        );
         s.loaded = true;
         match status {
             Ok(status) => {
@@ -401,7 +629,23 @@ pub fn refresh(hwnd: HWND) {
                 s.error = crate::i18n::trf("settings.default.error", &[&error.to_string()])
             }
         }
-        before != (s.enabled, s.recovery, s.error.clone())
+        match opening {
+            Ok(preferences) => {
+                s.opening = preferences;
+                s.opening_error.clear();
+            }
+            Err(error) => {
+                s.opening_error = crate::i18n::trf("settings.open.error", &[&error.to_string()])
+            }
+        }
+        before
+            != (
+                s.enabled,
+                s.recovery,
+                s.error.clone(),
+                s.opening,
+                s.opening_error.clone(),
+            )
     });
     if changed {
         super::invalidate_all(hwnd);
@@ -418,6 +662,20 @@ pub fn after_paint(hwnd: HWND) {
 }
 fn activate(hwnd: HWND, target: Target) {
     if target == Target::Section {
+        return;
+    }
+    if let Target::OpenIn(source, destination) = target {
+        let result = source.save(destination);
+        refresh(hwnd);
+        WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow_mut().as_mut() {
+                window.settings.opening_error = match result {
+                    Ok(()) => String::new(),
+                    Err(error) => crate::i18n::trf("settings.open.error", &[&error.to_string()]),
+                };
+            }
+        });
+        super::invalidate_all(hwnd);
         return;
     }
     let enabled = WINDOW.with(|slot| {
@@ -544,15 +802,46 @@ pub fn key(hwnd: HWND, key: u32) -> bool {
         if recovery {
             ring.push(Focus::Settings(Target::Restore));
         }
+        ring.extend(OPEN_CHOICES.map(Focus::Settings));
         let current = ring
             .iter()
             .position(|candidate| *candidate == focus)
             .unwrap_or(ring.len() - 1);
         let next = (current + if mods.shift { ring.len() - 1 } else { 1 }) % ring.len();
+        if let Focus::Settings(target) = ring[next] {
+            WINDOW.with(|slot| {
+                if let Some(window) = slot.borrow_mut().as_mut() {
+                    let bounds = window.settings.bounds(target);
+                    let shift = if bounds.top < 12.0 {
+                        bounds.top - 12.0
+                    } else if bounds.bottom > window.settings.size.1 - 12.0 {
+                        bounds.bottom - window.settings.size.1 + 12.0
+                    } else {
+                        0.0
+                    };
+                    window.settings.offset =
+                        (window.settings.offset + shift).clamp(0.0, window.settings.maximum);
+                }
+            });
+        }
         super::chrome::set_focus(hwnd, ring[next]);
+        super::invalidate_all(hwnd);
         return true;
     }
     if let Focus::Settings(target) = focus {
+        if let Target::OpenIn(source, _) = target {
+            if matches!(key, 0x25 | 0x27) && !mods.ctrl && !alt {
+                let destination = if key == 0x25 {
+                    Destination::NewTab
+                } else {
+                    Destination::NewWindow
+                };
+                let target = Target::OpenIn(source, destination);
+                super::chrome::set_focus(hwnd, Focus::Settings(target));
+                activate(hwnd, target);
+                return true;
+            }
+        }
         if matches!(key, 0x20 | 0x0d) && !mods.ctrl && !alt {
             activate(hwnd, target);
         }

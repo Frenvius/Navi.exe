@@ -415,6 +415,27 @@ msgstr "Settings"
 msgid "settings.general"
 msgstr "General"
 
+msgid "settings.open.external.title"
+msgstr "Folders opened from outside Navi"
+
+msgid "settings.open.external.description"
+msgstr "Choose where to open folders from the desktop, shortcuts, other apps and the jump list."
+
+msgid "settings.open.win-e.title"
+msgstr "Win+E"
+
+msgid "settings.open.win-e.description"
+msgstr "Choose where Win+E opens when Navi is the default file manager."
+
+msgid "settings.open.new-tab"
+msgstr "New tab"
+
+msgid "settings.open.new-window"
+msgstr "New window"
+
+msgid "settings.open.error"
+msgstr "Could not read or save opening preferences: {}"
+
 msgid "settings.default.title"
 msgstr "Set as the default file manager"
 
