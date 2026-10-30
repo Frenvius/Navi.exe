@@ -73,6 +73,9 @@ pub fn describe(key: &PROPERTYKEY) -> Option<Column> {
 /// not through the deleted file's own path.
 pub struct Items {
     folder: Option<IShellFolder>,
+    /// A file system folder bound once, so its items are found by name: parsing each full
+    /// path walks the namespace from the desktop, milliseconds per item under a sync root.
+    directory: Option<(String, IShellFolder)>,
     /// The items' IDs in the folder, by path (from the listing): Network's only give their
     /// values through them.
     children: std::collections::HashMap<String, Vec<u8>>,
@@ -83,53 +86,75 @@ impl Items {
     pub fn new(folder: &str, children: std::collections::HashMap<String, Vec<u8>>) -> Items {
         com_init();
         let native_details = super::archive::root(folder).is_some();
-        let folder = Pidl::parse(folder)
-            .ok()
-            .filter(|p| {
-                p.name(SIGDN_FILESYSPATH).is_empty()
-                    || super::archive::root(
-                        &p.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING),
-                    )
-                    .is_some()
-            })
-            .and_then(|p| p.folder().ok());
+        let parsed = Pidl::parse(folder).ok();
+        let is_virtual = parsed.as_ref().is_some_and(|p| {
+            p.name(SIGDN_FILESYSPATH).is_empty()
+                || super::archive::root(
+                    &p.name(windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING),
+                )
+                .is_some()
+        });
+        let bound = parsed.and_then(|p| p.folder().ok());
+        let (folder, directory) = if is_virtual {
+            (bound, None)
+        } else {
+            (None, bound.map(|bound| (folder.to_owned(), bound)))
+        };
         Items {
             folder,
+            directory,
             children,
             native_details,
         }
     }
 
     fn item(&self, path: &str) -> Option<IShellItem2> {
-        let w = wide(path);
         unsafe {
             if let (Some(folder), Some(child)) = (&self.folder, self.children.get(path)) {
                 if let Ok(item) = SHCreateItemWithParent(None, folder, child.as_ptr() as *const _) {
                     return Some(item);
                 }
             }
-            if let Some(folder) = &self.folder {
-                let mut child = std::ptr::null_mut();
-                if folder
-                    .ParseDisplayName(
-                        HWND::default(),
-                        None,
-                        PCWSTR(w.as_ptr()),
-                        None,
-                        &mut child,
-                        std::ptr::null_mut(),
-                    )
-                    .is_ok()
-                {
-                    let item = SHCreateItemWithParent(None, folder, child).ok();
-                    CoTaskMemFree(Some(child as *const _));
-                    if item.is_some() {
-                        return item;
-                    }
-                }
+            if let Some(item) = self.folder.as_ref().and_then(|folder| child_item(folder, path)) {
+                return Some(item);
             }
+            if let Some(item) = self.directory_item(path) {
+                return Some(item);
+            }
+            let w = wide(path);
             SHCreateItemFromParsingName::<_, _, IShellItem2>(PCWSTR(w.as_ptr()), None).ok()
         }
+    }
+
+    fn directory_item(&self, path: &str) -> Option<IShellItem2> {
+        let (directory, folder) = self.directory.as_ref()?;
+        let file = std::path::Path::new(path);
+        if !file.parent()?.to_str()?.eq_ignore_ascii_case(directory) {
+            return None;
+        }
+        child_item(folder, file.file_name()?.to_str()?)
+    }
+}
+
+/// An item of a bound folder by the name it parses (a full path for a virtual folder, the
+/// file name for a file system one).
+fn child_item(folder: &IShellFolder, name: &str) -> Option<IShellItem2> {
+    let w = wide(name);
+    let mut child = std::ptr::null_mut();
+    unsafe {
+        folder
+            .ParseDisplayName(
+                HWND::default(),
+                None,
+                PCWSTR(w.as_ptr()),
+                None,
+                &mut child,
+                std::ptr::null_mut(),
+            )
+            .ok()?;
+        let item = SHCreateItemWithParent(None, folder, child).ok();
+        CoTaskMemFree(Some(child as *const _));
+        item
     }
 }
 

@@ -17,10 +17,6 @@ use windows::Win32::UI::Shell::{
 
 use super::{com_init, display_name, icons, take_pwstr, Pidl};
 
-use std::time::{Duration, Instant};
-
-const SYNC_ICON_BUDGET: Duration = Duration::from_millis(150);
-
 #[derive(Clone, Debug)]
 pub struct ShellEntry {
     pub name: String,
@@ -324,13 +320,12 @@ pub fn for_each_pidl(
                 .is_empty()
             || super::archive::root(&parent_path).is_some();
 
-        let mut reader = EntryReader {
+        let reader = EntryReader {
             parent,
             folder,
             parent_path,
             origins,
             virtual_folder,
-            icon_time: Duration::ZERO,
         };
         loop {
             let mut child: [*mut ITEMIDLIST; 1] = [std::ptr::null_mut()];
@@ -694,11 +689,10 @@ struct EntryReader<'a> {
     parent_path: String,
     origins: Vec<super::library::Origin>,
     virtual_folder: bool,
-    icon_time: Duration,
 }
 
 impl EntryReader<'_> {
-    unsafe fn read(&mut self, child: *mut ITEMIDLIST) -> ShellEntry {
+    unsafe fn read(&self, child: *mut ITEMIDLIST) -> ShellEntry {
         let mut attrs = (SFGAO_FOLDER
             | SFGAO_STREAM
             | SFGAO_FILESYSTEM
@@ -753,17 +747,19 @@ impl EntryReader<'_> {
             None => (0, 0, 0, String::new(), 0, 0),
         };
 
-        let deferred = self.icon_time >= SYNC_ICON_BUDGET
-            && !is_link
-            && has(SFGAO_FILESYSTEM.0)
-            && icons::has_own_icon(&self.folder, child);
+        let is_dir = has(SFGAO_FOLDER.0) && !has(SFGAO_STREAM.0);
+        // Overlay handlers and shortcut targets cost milliseconds per item, so a file system
+        // item's real icon is resolved only once its row is shown.
+        let deferred = has(SFGAO_FILESYSTEM.0) && !is_drive;
         let (icon, icon_pending) = if deferred {
-            (icons::generic_icon(&path), true)
+            let placeholder = if is_dir {
+                icons::folder_icon()
+            } else {
+                icons::generic_icon(&path)
+            };
+            (placeholder, true)
         } else {
-            let started = Instant::now();
-            let icon = icons::icon_of(&self.folder, child, abs, is_link);
-            self.icon_time += started.elapsed();
-            (icon, false)
+            (icons::icon_of(&self.folder, child, abs, is_link), false)
         };
         let file_attributes = item
             .as_ref()
@@ -786,7 +782,7 @@ impl EntryReader<'_> {
             library_origin: super::library::origin_for(&path, &self.origins),
             name,
             path,
-            is_dir: has(SFGAO_FOLDER.0) && !has(SFGAO_STREAM.0),
+            is_dir,
             is_fs: has(SFGAO_FILESYSTEM.0),
             is_link,
             hidden: has(SFGAO_HIDDEN.0) || has(SFGAO_GHOSTED.0),
@@ -843,13 +839,12 @@ pub fn read_file(path: &str) -> Result<Option<ShellEntry>, String> {
         .into_owned();
     let parent = Pidl::parse(&parent_path)?;
     let absolute = Pidl::parse(path)?;
-    let mut reader = EntryReader {
+    let reader = EntryReader {
         parent: &parent,
         folder: parent.folder()?,
         parent_path,
         origins: Vec::new(),
         virtual_folder: false,
-        icon_time: Duration::ZERO,
     };
     let child = unsafe { windows::Win32::UI::Shell::ILFindLastID(absolute.ptr()) };
     let entry = unsafe { reader.read(child as *mut _) };

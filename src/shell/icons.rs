@@ -5,10 +5,11 @@ use windows::Win32::Graphics::Gdi::{
     BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
 };
 use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES};
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Controls::{IImageList, ILD_TRANSPARENT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    IExtractIconW, IShellFolder, IShellIcon, IShellIconOverlay, SHGetFileInfoW, SHGetImageList,
+    IShellFolder, IShellIcon, IShellIconOverlay, SHGetFileInfoW, SHGetImageList,
     SHMapPIDLToSystemImageListIndex, SHFILEINFOW, SHGFI_ICON, SHGFI_OVERLAYINDEX, SHGFI_PIDL,
     SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_USEFILEATTRIBUTES, SHIL_EXTRALARGE, SHIL_JUMBO,
     SHIL_LARGE, SHIL_SMALL,
@@ -19,8 +20,6 @@ use super::com_init;
 
 const GIL_FORSHELL: u32 = 0x0002;
 const GIL_CHECKSHIELD: u32 = 0x0200;
-const GIL_ASYNC: u32 = 0x0020;
-const GIL_PERINSTANCE: u32 = 0x0002;
 
 pub fn command_svg_path(name: &str) -> std::path::PathBuf {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
@@ -63,18 +62,6 @@ pub unsafe fn icon_of(
     base
 }
 
-pub unsafe fn has_own_icon(folder: &IShellFolder, child: *const ITEMIDLIST) -> bool {
-    let Ok(extract) = folder.GetUIObjectOf::<IExtractIconW>(HWND::default(), &[child], None) else {
-        return false;
-    };
-    let mut file = [0u16; 260];
-    let (mut index, mut flags) = (0i32, 0u32);
-    extract
-        .GetIconLocation(GIL_FORSHELL | GIL_ASYNC, &mut file, &mut index, &mut flags)
-        .is_ok()
-        && flags & GIL_PERINSTANCE != 0
-}
-
 pub fn generic_icon(path: &str) -> u32 {
     let ext = std::path::Path::new(path)
         .extension()
@@ -110,6 +97,28 @@ pub fn file_icon(path: &str) -> u32 {
         return 0;
     };
     unsafe { icon_of(&folder, pidl.last_id(), pidl.ptr(), false) }
+}
+
+/// The icon of an item named in an already bound folder. Parsing a full path walks the
+/// namespace from the desktop, which costs milliseconds per item under a sync root.
+pub fn icon_in(folder: &IShellFolder, name: &str) -> Option<u32> {
+    let mut wide = super::wide(name);
+    let mut child = std::ptr::null_mut();
+    unsafe {
+        folder
+            .ParseDisplayName(
+                HWND::default(),
+                None,
+                PWSTR(wide.as_mut_ptr()),
+                None,
+                &mut child,
+                std::ptr::null_mut(),
+            )
+            .ok()?;
+        let icon = icon_of(folder, child, std::ptr::null(), false);
+        CoTaskMemFree(Some(child as *const _));
+        Some(icon)
+    }
 }
 
 pub unsafe fn icon_of_pidl(abs: *const ITEMIDLIST) -> u32 {

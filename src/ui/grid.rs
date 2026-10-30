@@ -399,7 +399,11 @@ pub fn picture(folder: &Folder, row: usize) -> Picture {
     };
     let size = model.spec.icon as u32;
     let result = if model.kind == Kind::Icons && size == 16 {
-        super::icons::small(entry.icon)
+        super::icons::small(if entry.icon_pending {
+            crate::shell::icons::file_icon(&entry.path)
+        } else {
+            entry.icon
+        })
     } else {
         let pixels = if model.kind == Kind::Gallery {
             crate::shell::icons::gallery_picture(&entry.path, &entry.absolute, 768)

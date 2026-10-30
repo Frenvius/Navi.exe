@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::UI::Shell::IShellFolder;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 use crate::app::{columns, sort};
@@ -476,7 +477,7 @@ impl Job {
             .map(|e| (e.path.clone(), e.child.clone()))
             .collect();
         let mut items = shell::columns::Items::new(&path, children);
-        let mut images = HashMap::<u32, Arc<Rgba>>::new();
+        let mut icons = RowIcons::default();
         let mut generation = 0;
         let mut counts = (usize::from(!cached), 0);
         let mut queue = std::collections::VecDeque::new();
@@ -699,7 +700,7 @@ impl Job {
                     if epoch != generation {
                         continue;
                     }
-                    let rows = ready_rows(&folder, indices, &items, &mut images);
+                    let rows = ready_rows(&folder, indices, &items, &mut icons);
                     for row in &rows {
                         if row
                             .picture
@@ -732,7 +733,7 @@ impl Job {
                     folder.view.mode = mode;
                     folder.view.icon_size = size;
                     folder.grid = None;
-                    images.clear();
+                    icons.clear();
                     if folder.crumbs.last().is_some_and(|crumb| {
                         crate::app::ids::same(&crumb.id, crate::app::ids::THIS_PC)
                     }) {
@@ -755,7 +756,7 @@ impl Job {
                         model.bind_layout(layout);
                         Arc::new(model)
                     });
-                    images.clear();
+                    icons.clear();
                     if let Some(model) = &folder.grid {
                         send(Update::Grid(epoch, model.clone()));
                         if model.measured < folder.order.len() {
@@ -805,7 +806,7 @@ impl Job {
                             let remaining = indices.split_off(8);
                             queue.push_back(Request::Rows(epoch, remaining));
                         }
-                        let rows = ready_rows(&folder, indices, &items, &mut images);
+                        let rows = ready_rows(&folder, indices, &items, &mut icons);
                         if folder
                             .grid
                             .as_ref()
@@ -893,12 +894,12 @@ impl Job {
                         }
                     }
                     folder.entries = Arc::new(entries);
-                    images.clear();
+                    icons.clear();
                     let order = sort::updated_order(&previous, &folder.entries, &renames);
                     group_order(&mut folder, &items, order);
                     let range =
                         range.start.min(folder.order.len())..range.end.min(folder.order.len());
-                    let rows = ready_rows(&folder, range.collect(), &items, &mut images);
+                    let rows = ready_rows(&folder, range.collect(), &items, &mut icons);
                     send(Update::Changed(
                         epoch,
                         Arc::new(folder.clone()),
@@ -916,7 +917,7 @@ impl Job {
                     generation = epoch;
                     folder.network_notice = network_notice(&path);
                     discovered.clear();
-                    images.clear();
+                    icons.clear();
                     search
                         .current
                         .store(true, std::sync::atomic::Ordering::Release);
@@ -958,9 +959,9 @@ impl Job {
                                 .collect();
                             items = shell::columns::Items::new(&path, children);
                             arrange(&mut folder, &items);
-                            images.clear();
+                            icons.clear();
                             let range = reveal_range(&folder, range, reveal);
-                            let rows = ready_rows(&folder, range.collect(), &items, &mut images);
+                            let rows = ready_rows(&folder, range.collect(), &items, &mut icons);
                             send(Update::Changed(
                                 epoch,
                                 Arc::new(folder.clone()),
@@ -981,7 +982,7 @@ impl Job {
                     folder.view.search_ranked = false;
                     arrange(&mut folder, &items);
                     let range = reveal_range(&folder, range, reveal);
-                    let rows = ready_rows(&folder, range.collect(), &items, &mut images);
+                    let rows = ready_rows(&folder, range.collect(), &items, &mut icons);
                     super::memory::work("sort-worker", started);
                     send(Update::Order(
                         epoch,
@@ -1000,7 +1001,7 @@ impl Job {
                         epoch,
                         folder.order.clone(),
                         folder.headers.clone(),
-                        ready_rows(&folder, range.collect(), &items, &mut images),
+                        ready_rows(&folder, range.collect(), &items, &mut icons),
                     ));
                 }
                 Request::Toggle(option) => {
@@ -1034,7 +1035,7 @@ impl Job {
                         epoch,
                         folder.order.clone(),
                         folder.headers.clone(),
-                        ready_rows(&folder, range.collect(), &items, &mut images),
+                        ready_rows(&folder, range.collect(), &items, &mut icons),
                     ));
                 }
                 Request::Fit(epoch, cols, range, indices, indent) if epoch == generation => {
@@ -2027,7 +2028,7 @@ fn ready_rows(
     folder: &Folder,
     indices: Vec<usize>,
     items: &shell::columns::Items,
-    images: &mut HashMap<u32, Arc<Rgba>>,
+    icons: &mut RowIcons,
 ) -> Vec<Row> {
     let keys = folder
         .columns
@@ -2043,7 +2044,7 @@ fn ready_rows(
             let (icon, image) = if grid {
                 (entry.icon, None)
             } else {
-                row_icon(entry, images)
+                row_icon(entry, icons)
             };
             Some(Row {
                 index,
@@ -2063,16 +2064,54 @@ fn ready_rows(
         .collect()
 }
 
-fn row_icon(entry: &ShellEntry, images: &mut HashMap<u32, Arc<Rgba>>) -> (u32, Option<Arc<Rgba>>) {
-    if images.len() >= 256 {
-        images.clear();
+#[derive(Default)]
+struct RowIcons {
+    images: HashMap<u32, Arc<Rgba>>,
+    resolved: HashMap<String, u32>,
+    parent: Option<(String, IShellFolder)>,
+}
+
+impl RowIcons {
+    fn clear(&mut self) {
+        self.images.clear();
+        self.resolved.clear();
+        self.parent = None;
+    }
+
+    fn pending_icon(&mut self, path: &str) -> u32 {
+        if let Some(&icon) = self.resolved.get(path) {
+            return icon;
+        }
+        let icon = self.icon_in_parent(path).unwrap_or_else(|| shell::icons::file_icon(path));
+        self.resolved.insert(path.to_owned(), icon);
+        icon
+    }
+
+    fn icon_in_parent(&mut self, path: &str) -> Option<u32> {
+        let file = std::path::Path::new(path);
+        let parent = file.parent()?.to_str()?;
+        let name = file.file_name()?.to_str()?;
+        if self.parent.as_ref().is_none_or(|(bound, _)| bound != parent) {
+            shell::com_init();
+            let folder = shell::Pidl::parse(parent).ok()?.folder().ok()?;
+            self.parent = Some((parent.to_owned(), folder));
+        }
+        let (_, folder) = self.parent.as_ref()?;
+        shell::icons::icon_in(folder, name)
+    }
+}
+
+fn row_icon(entry: &ShellEntry, icons: &mut RowIcons) -> (u32, Option<Arc<Rgba>>) {
+    if icons.images.len() >= 256 {
+        icons.images.clear();
     }
     let path = &entry.path;
     let icon = if entry.icon_pending {
-        shell::icons::file_icon(path)
+        icons.pending_icon(path)
     } else {
         entry.icon
     };
+    let images = &mut icons.images;
     if let Some(image) = images.get(&icon) {
         return (icon, Some(image.clone()));
     }
@@ -2770,12 +2809,14 @@ mod tests {
         }
         let entries = crate::shell::listing::list(root.to_str().unwrap()).unwrap();
         let entry = entries.iter().find(|entry| entry.is_link).unwrap();
+        assert!(entry.icon_pending);
+        let (shown, _) = super::row_icon(entry, &mut super::RowIcons::default());
         let resolved = crate::shell::icons::file_icon(shortcut.to_str().unwrap());
         assert!(resolved >> 24 > 0);
-        assert_eq!(resolved >> 24, entry.icon >> 24);
+        assert_eq!(resolved >> 24, shown >> 24);
         assert_eq!(
             crate::shell::icons::icon(resolved, 16).unwrap().pixels,
-            crate::shell::icons::icon(entry.icon, 16).unwrap().pixels
+            crate::shell::icons::icon(shown, 16).unwrap().pixels
         );
         let mut settings = crate::shell::listing::settings();
         let mut styled = entries.iter().find(|entry| !entry.is_link).unwrap().clone();
@@ -2804,11 +2845,11 @@ mod tests {
         let resolved = shell::icons::file_icon(&entry.path);
         entry.icon_pending = false;
         entry.icon = resolved;
-        let (_, immediate) = row_icon(&entry, &mut HashMap::new());
+        let (_, immediate) = row_icon(&entry, &mut RowIcons::default());
         let immediate = immediate.unwrap();
         entry.icon_pending = true;
         entry.icon = shell::icons::generic_icon(&entry.path);
-        let (_, deferred) = row_icon(&entry, &mut HashMap::new());
+        let (_, deferred) = row_icon(&entry, &mut RowIcons::default());
         let deferred = deferred.unwrap();
         assert_eq!((immediate.width, immediate.height), (16, 16));
         assert_eq!((deferred.width, deferred.height), (16, 16));
@@ -2859,12 +2900,12 @@ mod tests {
         let file = entries.iter_mut().find(|e| !e.is_dir).unwrap();
         file.icon = u32::MAX;
         file.icon_pending = false;
-        let mut images = HashMap::new();
-        let (index, image) = row_icon(file, &mut images);
+        let mut icons = RowIcons::default();
+        let (index, image) = row_icon(file, &mut icons);
         assert_eq!(index, shell::icons::generic_icon(&file.path));
         assert!(image.unwrap().pixels.chunks_exact(4).any(|p| p[3] > 0));
         let folder = entries.iter().find(|e| e.is_dir).unwrap();
-        let (_, decoded) = row_icon(folder, &mut images);
+        let (_, decoded) = row_icon(folder, &mut icons);
         assert!(decoded.unwrap().pixels.chunks_exact(4).any(|p| p[3] > 0));
         std::fs::remove_file(root.join("dummy.exe")).unwrap();
         std::fs::remove_dir(root.join("folder")).unwrap();
