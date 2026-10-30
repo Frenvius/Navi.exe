@@ -4,7 +4,7 @@ use windows::core::{w, Result};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
-use windows::Win32::Graphics::DirectComposition::IDCompositionTarget;
+use windows::Win32::Graphics::DirectComposition::{IDCompositionDevice, IDCompositionTarget};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Gdi::{BeginPaint, EndPaint, PAINTSTRUCT};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -21,7 +21,6 @@ use super::theme::Theme;
 use crate::app::menu_model::{Action, Context, Icon, Menu};
 
 const SUBMENU_TIMER: usize = 40;
-const ANIMATION_TIMER: usize = 41;
 const TIP_TIMER: usize = 42;
 const KEYS_TIMER: usize = 43;
 
@@ -57,7 +56,7 @@ struct Popup {
     chrome: ID2D1Bitmap1,
     svg: super::svg::Assets,
     icons: std::collections::HashMap<usize, Rc<ID2D1Bitmap1>>,
-    animation: Option<(std::time::Instant, f32)>,
+    animation: Option<f32>,
     cloud: Option<super::cloud::State>,
 }
 
@@ -81,7 +80,7 @@ pub fn close() {
     if let Some(mut session) = session {
         let _context = super::context::enter(session.owner);
         super::tooltip::dismiss(session.owner);
-        for timer in [SUBMENU_TIMER, ANIMATION_TIMER, TIP_TIMER, KEYS_TIMER] {
+        for timer in [SUBMENU_TIMER, TIP_TIMER, KEYS_TIMER] {
             super::input::stop(session.owner, timer);
         }
         if let Some(overlay) = session.key_overlay.take() {
@@ -370,7 +369,6 @@ fn open(
         GetCursorPos(&mut pointer)?;
     }
     let focus = unsafe { GetFocus() };
-    let animated = popup.animation.is_some();
     let keyboard = popup.keyboard;
     use super::chrome::Command;
     command_state(
@@ -401,9 +399,6 @@ fn open(
     unsafe {
         let _ = SetFocus(Some(owner));
         SetCapture(owner);
-    }
-    if animated {
-        super::input::arm(owner, ANIMATION_TIMER, 16);
     }
     if keyboard {
         arm_keys(owner);
@@ -567,7 +562,7 @@ fn repaint() -> Result<()> {
             );
             popup.layer = Some(layer);
             painted?;
-            advance(popup)?;
+            advance(popup, &session.renderer.composition)?;
             unsafe {
                 let _ = ShowWindow(popup.hwnd, SW_SHOWNOACTIVATE);
             }
@@ -589,9 +584,6 @@ fn repaint() -> Result<()> {
         }
         Ok(())
     });
-    if session.levels.iter().all(|popup| popup.animation.is_none()) {
-        super::input::stop(session.owner, ANIMATION_TIMER);
-    }
     SESSION.with(|slot| *slot.borrow_mut() = Some(session));
     result
 }
@@ -1151,9 +1143,6 @@ fn child(session: &mut Session, level: usize, index: usize) -> Result<()> {
             Direction::Down
         },
     );
-    if popup.animation.is_some() {
-        super::input::arm(session.owner, ANIMATION_TIMER, 16);
-    }
     popup.keyboard = parent.keyboard;
     if popup.keyboard {
         popup.hover = menu_layout::next(&popup.menu, None, 1);
@@ -1197,12 +1186,6 @@ pub fn owner_message(owner: HWND, message: u32, wparam: WPARAM) -> Option<LRESUL
     {
         close();
         return None;
-    }
-    if message == WM_TIMER && wparam.0 == ANIMATION_TIMER {
-        if let Err(error) = animation_frame() {
-            paint_failure(owner, error);
-        }
-        return Some(LRESULT(0));
     }
     if message == WM_TIMER && matches!(wparam.0, TIP_TIMER | KEYS_TIMER) {
         super::input::stop(owner, wparam.0);
@@ -1620,23 +1603,15 @@ fn animate(popup: &mut Popup, direction: Direction) {
         return;
     }
     if enabled.as_bool() {
-        popup.animation = Some((
-            std::time::Instant::now(),
+        popup.animation = Some(
             popup.layout.height / 2.0
                 * if matches!(direction, Direction::Down) {
                     -1.0
                 } else {
                     1.0
                 },
-        ));
+        );
     }
-}
-
-unsafe fn layer_offset(popup: &Popup, offset: f32) -> Result<()> {
-    if let Some(layer) = &popup.layer {
-        layer.visual.SetOffsetY2(offset)?;
-    }
-    Ok(())
 }
 
 fn paint_failure(owner: HWND, error: windows::core::Error) {
@@ -1819,36 +1794,50 @@ fn remaining(progress: f32) -> f32 {
     1.0 - 3.0 * parameter * parameter + 2.0 * parameter * parameter * parameter
 }
 
-fn advance(popup: &mut Popup) -> Result<()> {
-    if let Some((started, distance)) = popup.animation {
-        let progress = started.elapsed().as_secs_f32() / 0.25;
-        let scale = unsafe { GetDpiForWindow(popup.hwnd) } as f32 / 96.0;
-        unsafe {
-            layer_offset(popup, distance * remaining(progress) * scale)?;
-        }
-        if progress >= 1.0 {
-            popup.animation = None;
-        }
-    }
-    Ok(())
+const ANIMATION_SECONDS: f64 = 0.25;
+const ANIMATION_SEGMENTS: usize = 12;
+
+fn curve() -> Vec<(f64, [f64; 4])> {
+    (0..ANIMATION_SEGMENTS)
+        .map(|segment| {
+            let progress =
+                |third: f64| ((segment as f64 + third / 3.0) / ANIMATION_SEGMENTS as f64).powi(3);
+            let start = progress(0.0);
+            let step = (progress(3.0) - start) / 3.0;
+            let y: [f64; 4] =
+                std::array::from_fn(|index| remaining((start + step * index as f64) as f32) as f64);
+            let first = y[1] - y[0];
+            let second = y[2] - 2.0 * y[1] + y[0];
+            let third = y[3] - 3.0 * y[2] + 3.0 * y[1] - y[0];
+            let seconds = step * ANIMATION_SECONDS;
+            (
+                start * ANIMATION_SECONDS,
+                [
+                    y[0],
+                    (first - second / 2.0 + third / 3.0) / seconds,
+                    (second - third) / 2.0 / seconds.powi(2),
+                    third / 6.0 / seconds.powi(3),
+                ],
+            )
+        })
+        .collect()
 }
 
-fn animation_frame() -> Result<()> {
-    let session = SESSION.with(|slot| slot.borrow_mut().take());
-    let Some(mut session) = session else {
+fn advance(popup: &mut Popup, composition: &IDCompositionDevice) -> Result<()> {
+    let (Some(distance), Some(layer)) = (popup.animation.take(), &popup.layer) else {
         return Ok(());
     };
-    let result = (|| {
-        for popup in &mut session.levels {
-            advance(popup)?;
+    let pixels = (distance * unsafe { GetDpiForWindow(popup.hwnd) } as f32 / 96.0) as f64;
+    unsafe {
+        let animation = composition.CreateAnimation()?;
+        for (begin, coefficients) in curve() {
+            let [constant, linear, quadratic, cubic] =
+                coefficients.map(|value| (value * pixels) as f32);
+            animation.AddCubic(begin, constant, linear, quadratic, cubic)?;
         }
-        unsafe { session.renderer.composition.Commit() }
-    })();
-    if session.levels.iter().all(|popup| popup.animation.is_none()) {
-        super::input::stop(session.owner, ANIMATION_TIMER);
+        animation.End(ANIMATION_SECONDS, 0.0)?;
+        layer.visual.SetOffsetY(&animation)
     }
-    SESSION.with(|slot| *slot.borrow_mut() = Some(session));
-    result
 }
 
 #[cfg(test)]
@@ -1858,6 +1847,26 @@ mod tests {
         assert_eq!(super::remaining(0.0), 1.0);
         assert_eq!(super::remaining(1.0), 0.0);
         assert!((super::remaining(0.125) - 0.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn composition_curve_follows_the_submenu_curve() {
+        let segments = super::curve();
+        for sample in 0..=1000 {
+            let seconds = sample as f64 / 1000.0 * super::ANIMATION_SECONDS;
+            let (begin, [constant, linear, quadratic, cubic]) = segments
+                .iter()
+                .rev()
+                .find(|(begin, _)| *begin <= seconds)
+                .unwrap();
+            let x = seconds - begin;
+            let value = constant + linear * x + quadratic * x * x + cubic * x * x * x;
+            let expected = super::remaining((seconds / super::ANIMATION_SECONDS) as f32) as f64;
+            assert!(
+                (value - expected).abs() < 0.005,
+                "{seconds}: {value} vs {expected}"
+            );
+        }
     }
 }
 
