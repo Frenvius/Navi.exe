@@ -44,6 +44,7 @@ mod scroll;
 mod search;
 mod session;
 mod settings;
+mod shell_windows;
 mod svg;
 mod tab_transfer;
 mod tabs;
@@ -239,7 +240,7 @@ fn create_window_with_launch(
             }
         });
         if let Some(path) = &launch.select {
-            launch::select(hwnd, path.clone());
+            launch::select(hwnd, vec![path.clone()]);
         }
         crate::app::entry::ready_window(hwnd);
         if launch.path.is_some() || launch.mode == crate::app::entry::Mode::NewWindow {
@@ -468,6 +469,7 @@ unsafe extern "system" fn window_proc(
         launch::close(hwnd);
         jumplist::close(hwnd);
         location::close(hwnd);
+        shell_windows::close(hwnd);
         hosted::close(hwnd);
         panes::close(hwnd);
         tooltip::closed(hwnd);
@@ -500,6 +502,10 @@ unsafe extern "system" fn window_proc(
         }
         location::CHANGED => {
             location::changed(hwnd, wparam.0, lparam.0);
+            return LRESULT(0);
+        }
+        shell_windows::SELECT => {
+            shell_windows::selected(hwnd);
             return LRESULT(0);
         }
         navigation::CHANGED => {
@@ -1511,6 +1517,7 @@ fn paint_window(hwnd: HWND) -> Result<()> {
     if result.is_ok() {
         launch::after_paint(hwnd);
         location::sync(hwnd);
+        shell_windows::sync(hwnd);
         hosted::sync(hwnd);
         panes::after_paint(hwnd);
         settings::after_paint(hwnd);

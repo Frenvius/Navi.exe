@@ -296,9 +296,63 @@ pub fn band_scroll(pointer: f32, top: f32, bottom: f32) -> f32 {
     }
 }
 
+pub const SHELL_SELECT: u32 = 0x1;
+pub const SHELL_DESELECT_OTHERS: u32 = 0x4;
+pub const SHELL_FOCUSED: u32 = 0x10;
+
+pub fn shell_selected(current: &Selection, requests: &[(String, u32)]) -> Vec<String> {
+    let mut paths = Vec::new();
+    if !requests
+        .iter()
+        .any(|(_, flags)| flags & SHELL_DESELECT_OTHERS != 0)
+    {
+        let mut selected: Vec<String> = current.selected.iter().cloned().collect();
+        selected.sort();
+        selected.sort_by_key(|path| current.focused.as_ref() != Some(path));
+        paths.extend(selected);
+    }
+    for (path, flags) in requests {
+        if flags & SHELL_SELECT == 0 {
+            paths.retain(|selected| selected != path);
+        } else if !paths.contains(path) {
+            paths.push(path.clone());
+        }
+    }
+    if let Some(focused) = requests
+        .iter()
+        .rev()
+        .find(|(path, flags)| flags & SHELL_FOCUSED != 0 && paths.contains(path))
+    {
+        paths.retain(|path| *path != focused.0);
+        paths.insert(0, focused.0.clone());
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_selection_replaces_adds_and_focuses() {
+        let current = Selection {
+            selected: HashSet::from(["a".to_owned(), "b".to_owned()]),
+            anchor: Some("b".to_owned()),
+            focused: Some("b".to_owned()),
+        };
+        let replace = [("x".to_owned(), 0x1d), ("y".to_owned(), 0x1)];
+        assert_eq!(shell_selected(&current, &replace), ["x", "y"]);
+        let add = [("y".to_owned(), 0x1)];
+        assert_eq!(shell_selected(&current, &add), ["b", "a", "y"]);
+        let focus = [("y".to_owned(), 0x11), ("a".to_owned(), 0x0)];
+        assert_eq!(shell_selected(&current, &focus), ["y", "b"]);
+        assert!(shell_selected(&Selection::default(), &[]).is_empty());
+        let focus_only = Selection {
+            focused: Some("a".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(shell_selected(&focus_only, &add), ["y"]);
+    }
 
     #[test]
     fn modifiers_preserve_anchor_pending_narrow_and_keyboard_focus() {

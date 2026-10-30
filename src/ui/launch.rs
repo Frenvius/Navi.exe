@@ -157,7 +157,7 @@ pub fn ready(hwnd: HWND) {
                 Action::NewTab => super::tabs::open(hwnd, &request.path)?,
             }
             if let Some(path) = request.select {
-                select(hwnd, path);
+                select(hwnd, vec![path]);
             }
             Ok(())
         })();
@@ -167,14 +167,17 @@ pub fn ready(hwnd: HWND) {
     }
 }
 
-pub fn select(hwnd: HWND, path: String) {
+pub fn select(hwnd: HWND, paths: Vec<String>) {
+    let Some(path) = paths.first().cloned() else {
+        return;
+    };
     super::WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(window) = slot.as_mut() else {
             return;
         };
         let selection = crate::app::selection::Selection {
-            selected: std::collections::HashSet::from([path.clone()]),
+            selected: paths.into_iter().collect(),
             anchor: Some(path.clone()),
             focused: Some(path.clone()),
             ..Default::default()
