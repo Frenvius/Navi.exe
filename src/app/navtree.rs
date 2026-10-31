@@ -1,34 +1,40 @@
 use crate::app::ids;
 use crate::shell::nav::NavNode;
+use windows::core::GUID;
 
-const CLSID_HOME: &str = "F874310E-B6B7-47DC";
-const CLSID_GALLERY: &str = "E88865EA-0E1C-4E20";
-const CLSID_ONEDRIVE: &str = "018D5C66-4533-4307";
-const CLSID_THIS_PC: &str = "20D04FE0-3AEA-1069";
-const CLSID_LIBRARIES: &str = "031E4825-7B94-4DC3";
-const CLSID_NETWORK: &str = "F02C1A0D-BE21-4350";
+const CLSID_HOME: GUID = GUID::from_u128(0xf874310e_b6b7_47dc_bc84_b9e6b38f5903);
+const CLSID_GALLERY: GUID = GUID::from_u128(0xe88865ea_0e1c_4e20_9aa6_edcd0212c87c);
+const CLSID_ONEDRIVE: GUID = GUID::from_u128(0x018d5c66_4533_4307_9b53_224de2ed1fe6);
+const CLSID_THIS_PC: GUID = GUID::from_u128(0x20d04fe0_3aea_1069_a2d8_08002b30309d);
+const CLSID_LIBRARIES: GUID = GUID::from_u128(0x031e4825_7b94_4dc3_b131_e946b44c8dd5);
+const CLSID_NETWORK: GUID = GUID::from_u128(0xf02c1a0d_be21_4350_88b0_7367fc96ef3c);
+const PIN_GROUP: u32 = 0x45;
 
-fn rank(node: &NavNode) -> u8 {
-    let id = node.id.to_uppercase();
-    if id.contains(CLSID_HOME) {
-        0
-    } else if id.contains(CLSID_GALLERY) {
-        1
-    } else if id.contains(CLSID_ONEDRIVE) || (node.is_fs && node.id.is_empty()) {
-        2
-    } else if node.is_fs && !ids::is_drive_root(&node.id) {
-        4
-    } else if id.contains(CLSID_THIS_PC) {
-        5
-    } else if ids::is_drive_root(&node.id) {
-        6
-    } else if id.contains(CLSID_LIBRARIES) {
-        7
-    } else if id.contains(CLSID_NETWORK) {
-        8
-    } else {
-        9
-    }
+fn group(node: &NavNode) -> u32 {
+    node.group_id.unwrap_or_else(|| {
+        node.namespace_id()
+            .and_then(|id| {
+                [
+                    (CLSID_HOME, 0x40),
+                    (CLSID_GALLERY, 0x41),
+                    (CLSID_ONEDRIVE, 0x42),
+                    (CLSID_THIS_PC, 0x50),
+                    (CLSID_LIBRARIES, 0x54),
+                    (CLSID_NETWORK, 0x58),
+                ]
+                .into_iter()
+                .find_map(|(clsid, group)| (id == clsid).then_some(group))
+            })
+            .unwrap_or_else(|| {
+                if ids::is_drive_root(&node.id) {
+                    0x56
+                } else if node.is_fs {
+                    0x47
+                } else {
+                    0x80
+                }
+            })
+    })
 }
 
 #[derive(Clone)]
@@ -223,15 +229,6 @@ impl NavTree {
         } else {
             roots
         };
-        let mut home: Vec<NavNode> = roots.iter().filter(|n| rank(n) <= 2).cloned().collect();
-        let mut devices: Vec<NavNode> = roots.iter().filter(|n| rank(n) > 2).cloned().collect();
-        home.sort_by_key(rank);
-        devices.sort_by_key(rank);
-        for node in home.iter_mut() {
-            if rank(node) == 0 {
-                node.has_children = false;
-            }
-        }
         let pins: Vec<NavNode> = pins.into_iter().filter(|p| p.is_pinned).collect();
 
         let old = std::mem::take(&mut self.sections);
@@ -246,6 +243,15 @@ impl NavTree {
                 Vec::new(),
             ]
         } else {
+            let mut roots = roots;
+            roots.sort_by_key(group);
+            let (mut home, devices): (Vec<_>, Vec<_>) =
+                roots.into_iter().partition(|node| group(node) < PIN_GROUP);
+            for node in &mut home {
+                if node.namespace_id() == Some(CLSID_HOME) {
+                    node.has_children = false;
+                }
+            }
             vec![
                 home.into_iter().map(TreeNode::new).collect(),
                 pins.into_iter().map(TreeNode::new).collect(),
@@ -446,6 +452,8 @@ mod tests {
             has_children: true,
             is_fs: false,
             is_pinned: false,
+            group_id: None,
+            namespace_clsid: None,
         }
     }
 
@@ -472,21 +480,164 @@ mod tests {
     }
 
     #[test]
-    fn only_onedrive_joins_home_while_other_folder_roots_precede_this_pc() {
+    fn missing_groups_use_namespace_identity_without_guessing_from_an_empty_path() {
         let mut dropbox = node("C:\\Users\\A\\Dropbox");
         dropbox.is_fs = true;
-        let mut onedrive = node("");
+        let mut onedrive = node("C:\\Users\\A\\OneDrive");
         onedrive.is_fs = true;
-        assert_eq!(rank(&onedrive), 2);
-        assert_eq!(rank(&dropbox), 4);
-        assert!(rank(&dropbox) < rank(&node(ids::THIS_PC)));
+        onedrive.namespace_clsid = Some(CLSID_ONEDRIVE);
+        let mut unknown = node("");
+        unknown.is_fs = true;
+        let mut tree = NavTree::default();
+        tree.set_roots(
+            vec![
+                node(ids::THIS_PC),
+                dropbox.clone(),
+                unknown,
+                onedrive.clone(),
+                node(ids::HOME),
+            ],
+            vec![],
+            None,
+        );
+        assert_eq!(
+            tree.sections[0]
+                .iter()
+                .map(|n| n.node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![ids::HOME, onedrive.id.as_str()]
+        );
+        assert_eq!(
+            tree.sections[2]
+                .iter()
+                .map(|n| n.node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![dropbox.id.as_str(), "", ids::THIS_PC]
+        );
+    }
+
+    fn grouped(id: &str, group_id: u32) -> NavNode {
+        let mut node = node(id);
+        node.group_id = Some(group_id);
+        node
+    }
+
+    fn section_ids(tree: &NavTree, section: usize) -> Vec<&str> {
+        tree.sections[section]
+            .iter()
+            .map(|node| node.node.id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn native_groups_keep_shell_ties_and_quick_access_order_with_a_physical_onedrive_path() {
+        let mut onedrive = grouped("C:\\Users\\A\\OneDrive", 66);
+        onedrive.namespace_clsid = Some(CLSID_ONEDRIVE);
+        onedrive.is_fs = true;
+        let mut first_pin = grouped("C:\\Z pinned", 69);
+        first_pin.is_pinned = true;
+        let mut second_pin = grouped("C:\\A pinned", 69);
+        second_pin.is_pinned = true;
+        let mut tree = NavTree::default();
+        tree.set_roots(
+            vec![
+                grouped(ids::THIS_PC, 80),
+                grouped("C:\\Z cloud", 71),
+                grouped(ids::HOME, 64),
+                onedrive,
+                grouped("C:\\A cloud", 71),
+                grouped(ids::GALLERY, 65),
+            ],
+            vec![first_pin, grouped("C:\\Frequent", 69), second_pin],
+            None,
+        );
+        assert_eq!(
+            section_ids(&tree, 0),
+            vec![ids::HOME, ids::GALLERY, "C:\\Users\\A\\OneDrive"]
+        );
+        assert_eq!(
+            section_ids(&tree, PINS),
+            vec!["C:\\Z pinned", "C:\\A pinned"]
+        );
+        assert_eq!(
+            section_ids(&tree, 2),
+            vec!["C:\\Z cloud", "C:\\A cloud", ids::THIS_PC]
+        );
+        assert!(!tree.sections[0][0].node.has_children);
+        assert!(tree.sections[0][1].node.has_children);
+    }
+
+    #[test]
+    fn reported_group_overrides_namespace_fallback_and_zero_is_a_valid_group() {
+        let mut onedrive = grouped("C:\\Users\\A\\OneDrive", 71);
+        onedrive.namespace_clsid = Some(CLSID_ONEDRIVE);
+        let mut home = node("C:\\Home parsing alias");
+        home.namespace_clsid = Some(CLSID_HOME);
+        let mut tree = NavTree::default();
+        tree.set_roots(
+            vec![onedrive, home, grouped("C:\\Explicit zero", 0)],
+            vec![],
+            None,
+        );
+        assert_eq!(
+            section_ids(&tree, 0),
+            vec!["C:\\Explicit zero", "C:\\Home parsing alias"]
+        );
+        assert!(tree.sections[0][0].node.has_children);
+        assert!(!tree.sections[0][1].node.has_children);
+        assert_eq!(section_ids(&tree, 2), vec!["C:\\Users\\A\\OneDrive"]);
+    }
+
+    #[test]
+    fn a_late_root_is_regrouped_on_refresh_without_losing_expanded_children() {
+        let home = grouped(ids::HOME, 64);
+        let gallery = grouped(ids::GALLERY, 65);
+        let pc = grouped(ids::THIS_PC, 80);
+        let mut pin = grouped("C:\\Pinned", 69);
+        pin.is_pinned = true;
+        let mut tree = NavTree::default();
+        tree.set_roots(
+            vec![home.clone(), gallery.clone(), pc.clone()],
+            vec![pin.clone()],
+            None,
+        );
+        tree.sections[2][0].expanded = true;
+        tree.sections[2][0].children = Some(vec![TreeNode::new(node("C:\\"))]);
+        tree.flatten();
+        let mut late = grouped("C:\\Users\\A\\OneDrive", 66);
+        late.namespace_clsid = Some(CLSID_ONEDRIVE);
+        tree.set_roots(vec![home, gallery, pc, late], vec![pin], None);
+        assert_eq!(
+            section_ids(&tree, 0),
+            vec![ids::HOME, ids::GALLERY, "C:\\Users\\A\\OneDrive"]
+        );
+        assert_eq!(section_ids(&tree, PINS), vec!["C:\\Pinned"]);
+        assert!(tree.sections[2][0].expanded);
+        assert_eq!(
+            tree.sections[2][0].children.as_ref().unwrap()[0].node.id,
+            "C:\\"
+        );
+        assert!(tree.rows.iter().any(|row| row.depth == 1
+            && tree
+                .node(&row.reference)
+                .is_some_and(|node| node.node.id == "C:\\")));
+    }
+
+    #[test]
+    fn missing_group_does_not_treat_guid_text_inside_a_physical_path_as_a_namespace() {
+        let mut unknown = node("C:\\{018D5C66-4533-4307-9B53-224DE2ED1FE6}\\files");
+        unknown.is_fs = true;
+        let mut tree = NavTree::default();
+        tree.set_roots(vec![unknown, node(ids::HOME)], vec![], None);
+        assert_eq!(section_ids(&tree, 0), vec![ids::HOME]);
+        assert_eq!(tree.sections[2].len(), 1);
     }
 
     #[test]
     fn drive_roots_follow_this_pc_before_network() {
         let mut drive = node("E:\\");
         drive.is_fs = true;
-        let order = [node(ids::THIS_PC), drive, node(ids::NETWORK)].map(|n| rank(&n));
+        let order = [node(ids::THIS_PC), drive, node(ids::NETWORK)].map(|n| group(&n));
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
     }
 

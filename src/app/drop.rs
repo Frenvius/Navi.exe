@@ -80,6 +80,8 @@ mod drop_tests {
             has_children: false,
             is_fs: true,
             is_pinned: pinned,
+            group_id: None,
+            namespace_clsid: None,
         };
         let mut tree = super::super::navtree::NavTree::default();
         tree.set_roots(

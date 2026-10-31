@@ -1,4 +1,4 @@
-use windows::core::PCWSTR;
+use windows::core::{GUID, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, PROPERTYKEY};
 use windows::Win32::Storage::EnhancedStorage::PKEY_IsPinnedToNameSpaceTree;
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -22,20 +22,33 @@ pub struct NavNode {
     pub has_children: bool,
     pub is_fs: bool,
     pub is_pinned: bool,
+    pub group_id: Option<u32>,
+    pub namespace_clsid: Option<GUID>,
 }
 
-/// Desktop children that Explorer always shows in the tree (This PC, Network, Home, Quick
-/// access, Gallery), besides the ones pinned to the namespace tree.
-const KEEP_CLSIDS: [&str; 5] = [
-    "20D04FE0-3AEA-1069",
-    "F02C1A0D-BE21-4350",
-    "F874310E-B6B7-47DC",
-    "679F85CB-0220-4080",
-    "E88865EA-0E1C-4E20",
+impl NavNode {
+    pub fn namespace_id(&self) -> Option<GUID> {
+        self.namespace_clsid
+            .filter(|id| *id != GUID::zeroed())
+            .or_else(|| parsing_namespace(&self.id))
+    }
+}
+
+fn parsing_namespace(id: &str) -> Option<GUID> {
+    let id = id.strip_prefix("shell:").unwrap_or(id);
+    GUID::try_from(id.strip_prefix("::{")?.strip_suffix('}')?).ok()
+}
+
+const KEEP_CLSIDS: [GUID; 5] = [
+    GUID::from_u128(0x20d04fe0_3aea_1069_a2d8_08002b30309d),
+    GUID::from_u128(0xf02c1a0d_be21_4350_88b0_7367fc96ef3c),
+    GUID::from_u128(0xf874310e_b6b7_47dc_bc84_b9e6b38f5903),
+    GUID::from_u128(0x679f85cb_0220_4080_b29b_5540cc05aab6),
+    GUID::from_u128(0xe88865ea_0e1c_4e20_9aa6_edcd0212c87c),
 ];
 
-fn home_pinned_key() -> Option<PROPERTYKEY> {
-    let name = wide("System.Home.IsPinned");
+fn property_key(name: &str) -> Option<PROPERTYKEY> {
+    let name = wide(name);
     let mut key = PROPERTYKEY::default();
     unsafe {
         PSGetPropertyKeyFromName(PCWSTR(name.as_ptr()), &mut key)
@@ -61,7 +74,13 @@ pub fn children(id: &str) -> Result<Vec<NavNode>, String> {
             .EnumObjects(HWND::default(), flags, &mut penum)
             .ok()
             .map_err(|e| e.message())?;
-        let home_key = if at_root { None } else { home_pinned_key() };
+        let home_key = if at_root {
+            None
+        } else {
+            property_key("System.Home.IsPinned")
+        };
+        let group_key = property_key("System.Namespace.GroupId");
+        let namespace_key = property_key("System.NamespaceCLSID");
 
         let mut out = Vec::new();
         let Some(en) = penum else { return Ok(out) };
@@ -79,26 +98,30 @@ pub fn children(id: &str) -> Result<Vec<NavNode>, String> {
         for crel in children {
             let abs = ILCombine(Some(parent.ptr()), Some(crel));
             let node_id = name_of(abs, SIGDN_DESKTOPABSOLUTEPARSING);
+            let item = SHCreateItemFromIDList::<IShellItem2>(abs).ok();
             let get_bool = |key: &PROPERTYKEY| {
-                SHCreateItemFromIDList::<IShellItem2>(abs)
-                    .ok()
+                item.as_ref()
                     .and_then(|it| it.GetBool(key).ok())
                     .map(|b| b.as_bool())
                     .unwrap_or(false)
             };
+            let namespace_clsid = namespace_key
+                .as_ref()
+                .and_then(|key| item.as_ref()?.GetCLSID(key).ok())
+                .filter(|id| *id != GUID::zeroed());
 
             let keep;
             let is_pinned = if at_root {
-                let up = node_id.to_uppercase();
+                let clsid = namespace_clsid.or_else(|| parsing_namespace(&node_id));
                 let pinned = get_bool(&PKEY_IsPinnedToNameSpaceTree);
-                keep = if up.contains("20D04FE0-3AEA-1069") {
+                keep = if clsid == Some(KEEP_CLSIDS[0]) {
                     options.this_pc
-                } else if up.contains("F02C1A0D-BE21-4350") {
+                } else if clsid == Some(KEEP_CLSIDS[1]) {
                     options.network
-                } else if up.contains("031E4825-7B94-4DC3") {
+                } else if clsid == Some(GUID::from_u128(0x031e4825_7b94_4dc3_b131_e946b44c8dd5)) {
                     options.all || options.libraries
                 } else {
-                    options.all || pinned || KEEP_CLSIDS.iter().any(|c| up.contains(c))
+                    options.all || pinned || clsid.is_some_and(|id| KEEP_CLSIDS.contains(&id))
                 };
                 pinned
             } else {
@@ -117,6 +140,10 @@ pub fn children(id: &str) -> Result<Vec<NavNode>, String> {
                     has_children: attrs & SFGAO_HASSUBFOLDER.0 != 0,
                     is_fs: attrs & SFGAO_FILESYSTEM.0 != 0,
                     is_pinned,
+                    group_id: group_key
+                        .as_ref()
+                        .and_then(|key| item.as_ref()?.GetUInt32(key).ok()),
+                    namespace_clsid,
                 });
             }
             ILFree(Some(abs));
@@ -179,7 +206,6 @@ pub fn accent_fill(dark: bool) -> u32 {
     }
 }
 
-/// The desktop root appears only in "Show all folders", initially expanded.
 pub fn desktop() -> Option<NavNode> {
     let root = Pidl::parse("").ok()?;
     Some(NavNode {
@@ -189,5 +215,7 @@ pub fn desktop() -> Option<NavNode> {
         has_children: true,
         is_fs: false,
         is_pinned: false,
+        group_id: None,
+        namespace_clsid: None,
     })
 }
