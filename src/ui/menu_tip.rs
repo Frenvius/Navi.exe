@@ -295,7 +295,6 @@ impl Overlay {
                 let opacity = renderer.composition.CreateEffectGroup()?;
                 opacity.SetOpacity2(0.0)?;
                 layer.visual.SetEffect(&opacity)?;
-                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
                 renderer.composition.Commit()?;
                 Ok(Self {
                     hwnd,
@@ -317,7 +316,9 @@ impl Overlay {
     pub fn reveal(&self, renderer: &Renderer) -> Result<()> {
         unsafe {
             self.opacity.SetOpacity2(1.0)?;
-            renderer.composition.Commit()
+            renderer.composition.Commit()?;
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            Ok(())
         }
     }
 
