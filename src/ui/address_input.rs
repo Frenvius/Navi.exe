@@ -768,6 +768,7 @@ pub fn activate(hwnd: HWND, target: Target) {
     let result: Result<()> = (|| {
         match target {
             Target::Settings => super::settings::open(hwnd)?,
+            Target::Update => super::update::activate(),
             Target::Back => super::navigate(hwnd, super::Navigation::Back)?,
             Target::Forward => super::navigate(hwnd, super::Navigation::Forward)?,
             Target::Up => super::navigate(hwnd, super::Navigation::Up)?,

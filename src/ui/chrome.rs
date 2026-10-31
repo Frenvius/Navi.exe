@@ -1617,6 +1617,7 @@ pub fn key(hwnd: windows::Win32::Foundation::HWND, key: u32) -> bool {
                 forward: window.address.enabled[1],
                 up: window.address.enabled[2],
                 settings: true,
+                update: window.address.update.shows_button(),
             })
         });
         let Some(facts) = facts else { return true };
@@ -1641,6 +1642,7 @@ pub fn key(hwnd: windows::Win32::Foundation::HWND, key: u32) -> bool {
                 Address::Address => "address",
                 Address::Search => "search",
                 Address::Settings => "settings",
+                Address::Update => "update",
                 _ => "crumbs",
             },
         };
@@ -1666,6 +1668,7 @@ pub fn key(hwnd: windows::Win32::Foundation::HWND, key: u32) -> bool {
             "crumbs" => Focus::Address(Address::Root),
             "search" => Focus::Address(Address::Search),
             "settings" => Focus::Address(Address::Settings),
+            "update" => Focus::Address(Address::Update),
             "commands" => commands
                 .first()
                 .copied()

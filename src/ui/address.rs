@@ -31,6 +31,7 @@ pub enum Target {
     Search,
     SearchClear,
     Settings,
+    Update,
 }
 
 #[derive(Clone)]
@@ -382,8 +383,10 @@ pub struct State {
     pub cloud_image: Option<Arc<Vec<u8>>>,
     pub boxes: Vec<(Target, D2D_RECT_F)>,
     pub width: f32,
+    pub end: f32,
     pub address_width: f32,
     pub search_left: f32,
+    pub update: crate::app::update::State,
 }
 
 impl State {
@@ -408,7 +411,10 @@ impl State {
 
     pub fn layout(&mut self, width: f32, text: &mut TextEngine) -> Result<()> {
         self.width = width;
-        let total = (width - 220.0).max(0.0);
+        self.update = crate::app::update::state();
+        let end = width - if self.update.shows_button() { 36.0 } else { 0.0 };
+        self.end = end;
+        let total = (end - 220.0).max(0.0);
         let original_search = ((total - 37.333) * 0.3).round().max(0.0);
         let search = (original_search - 40.0).max(0.0);
         self.address_width = total - original_search;
@@ -436,7 +442,11 @@ impl State {
                 .push((target, rect(11.0 + 48.0 * index as f32, 8.0, 32.0, 32.0)));
         }
         self.boxes
-            .push((Target::Settings, rect(width - 43.0, 8.0, 32.0, 32.0)));
+            .push((Target::Settings, rect(end - 43.0, 8.0, 32.0, 32.0)));
+        if self.update.shows_button() {
+            self.boxes
+                .push((Target::Update, rect(width - 43.0, 8.0, 32.0, 32.0)));
+        }
         self.boxes
             .push((Target::Address, rect(201.0, 8.0, self.address_width, 32.0)));
         self.boxes
@@ -498,7 +508,7 @@ impl State {
         }
         if !self.search_edit.text.is_empty() {
             self.boxes
-                .push((Target::SearchClear, rect(width - 120.0, 13.0, 30.0, 22.0)));
+                .push((Target::SearchClear, rect(end - 120.0, 13.0, 30.0, 22.0)));
         }
         Ok(())
     }
@@ -751,7 +761,7 @@ pub fn draw(
     let search = rect(
         state.search_left,
         8.0,
-        (state.width - 51.0 - state.search_left).max(0.0),
+        (state.end - 51.0 - state.search_left).max(0.0),
         32.0,
     );
     rounded(
@@ -776,21 +786,31 @@ pub fn draw(
             &theme.control
         },
     );
-    if let Some(bounds) = state.bounds(Target::Settings) {
-        if state.hover == Some(Target::Settings) {
+    let update_color = match state.update {
+        crate::app::update::State::Installing(_) => &theme.text_disabled,
+        _ => &theme.accent,
+    };
+    for (target, icon, color) in [
+        (Target::Settings, "\u{e713}", &theme.text),
+        (Target::Update, "\u{e7b8}", update_color),
+    ] {
+        let Some(bounds) = state.bounds(target) else {
+            continue;
+        };
+        if state.hover == Some(target) {
             rounded(
                 canvas,
                 bounds,
                 4.0,
-                if state.pressed == Some(Target::Settings) {
+                if state.pressed == Some(target) {
                     &theme.subtle_pressed
                 } else {
                     &theme.subtle_hover
                 },
             );
         }
-        glyph(canvas, text, "\u{e713}", bounds, &theme.text)?;
-        if state.cues && state.focus == Some(Target::Settings) {
+        glyph(canvas, text, icon, bounds, color)?;
+        if state.cues && state.focus == Some(target) {
             super::chrome::focus_ring_radius(
                 canvas,
                 rect(bounds.left - 3.0, bounds.top - 3.0, 38.0, 38.0),

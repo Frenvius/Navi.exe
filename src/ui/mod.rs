@@ -54,6 +54,7 @@ mod text_run;
 pub mod theme;
 mod titlebar;
 mod tooltip;
+mod update;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -158,7 +159,10 @@ fn run_window() -> Result<()> {
             return Err(windows::core::Error::from_win32());
         }
         let result =
-            create_window_with_launch(&path, started, &launch).and_then(|_| message_loop());
+            create_window_with_launch(&path, started, &launch).and_then(|_| {
+                update::start();
+                message_loop()
+            });
         for hwnd in context::handles() {
             if IsWindow(Some(hwnd)).as_bool() {
                 DestroyWindow(hwnd)?;
@@ -536,6 +540,10 @@ unsafe extern "system" fn window_proc(
         }
         menu_actions::ASYNC_DONE => {
             menu_actions::completed(hwnd);
+            return LRESULT(0);
+        }
+        update::CHANGED => {
+            update::changed(hwnd);
             return LRESULT(0);
         }
         list::READY => {

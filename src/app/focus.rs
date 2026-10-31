@@ -9,6 +9,7 @@ pub struct Facts {
     pub forward: bool,
     pub up: bool,
     pub settings: bool,
+    pub update: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +127,9 @@ pub fn destination(at: &str, facts: &Facts, step: Step) -> &'static str {
             if facts.settings {
                 ring.push("settings");
             }
+            if facts.update {
+                ring.push("update");
+            }
             ring.extend(["commands", "pane-command"]);
         }
         if tree {
@@ -191,6 +195,7 @@ mod tests {
             forward: false,
             up: true,
             settings: false,
+            update: false,
         }
     }
 

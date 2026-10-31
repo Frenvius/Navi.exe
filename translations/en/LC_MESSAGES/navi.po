@@ -12,6 +12,15 @@ msgstr ""
 msgid "app.title"
 msgstr "File Explorer"
 
+msgid "app.update.available"
+msgstr "Update to Navi {} and restart"
+
+msgid "app.update.installing"
+msgstr "Downloading Navi {}..."
+
+msgid "app.update.failed"
+msgstr "Update failed: {}. Click to try again."
+
 msgid "tab.close.tip"
 msgstr "Close tab (Ctrl+W)"
 

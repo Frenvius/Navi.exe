@@ -1,7 +1,9 @@
 [package]
 name = "navi"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Frenvius/Navi.exe"
 
 [dependencies]
 windows-core = "0.61"
@@ -58,6 +60,8 @@ windows = { version = "0.61", features = [
   "Win32_System_Recovery",
   "Win32_Security",
   "Win32_Security_Authentication_Identity",
+  "Win32_Security_Cryptography",
+  "Win32_Networking_WinHttp",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Input_Ime",
 ] }

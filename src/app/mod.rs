@@ -30,6 +30,7 @@ pub mod sort;
 pub mod tab_transfer;
 pub(crate) mod tabs;
 pub(crate) mod undo;
+pub(crate) mod update;
 pub mod view;
 pub(crate) mod zoxide;
 pub(crate) mod zoxide_install;

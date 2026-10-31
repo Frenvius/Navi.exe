@@ -576,6 +576,7 @@ fn target(point: (f32, f32), cursor: POINT) -> Option<Tip> {
                     }
                 }
                 Target::Settings => crate::i18n::tr("settings.title").into(),
+                Target::Update => super::update::tooltip(&window.address.update)?,
                 Target::Refresh => crate::i18n::trf("nav.refresh.tip", &[&window.address.location]),
                 Target::Crumb(_) => return None,
                 _ => return None,
