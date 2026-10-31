@@ -42,6 +42,7 @@ impl Canvas {
         Ok(image)
     }
     pub fn system_icon(&self, source: &crate::shell::icons::Rgba) -> Result<ID2D1Bitmap1> {
+        let started = std::time::Instant::now();
         let mut pixels = Vec::with_capacity(source.pixels.len());
         for rgba in source.pixels.chunks_exact(4) {
             let alpha = rgba[3] as u32;
@@ -50,7 +51,7 @@ impl Canvas {
             }
             pixels.push(rgba[3]);
         }
-        unsafe {
+        let result = unsafe {
             self.context.CreateBitmap(
                 D2D_SIZE_U {
                     width: source.width,
@@ -68,7 +69,16 @@ impl Canvas {
                     ..Default::default()
                 },
             )
+        };
+        if crate::shell::icons::thumb_probe() {
+            eprintln!(
+                "thumb-upload|width={}|height={}|total_us={}",
+                source.width,
+                source.height,
+                started.elapsed().as_micros()
+            );
         }
+        result
     }
 }
 

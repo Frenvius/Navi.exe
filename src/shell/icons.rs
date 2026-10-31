@@ -462,6 +462,20 @@ pub fn view_picture(path: &str, size: u32) -> Result<Rgba, String> {
             false,
         );
     }
+    if super::thumb_cache::eligible(path, size) {
+        if let Some(image) = super::thumb_cache::read(path, size) {
+            return Ok(image);
+        }
+        if let Ok(image) = view_thumbnail(path, size, true) {
+            return Ok(image);
+        }
+        if !cloud_only(path) {
+            if let Ok(image) = view_thumbnail(path, size, false) {
+                return Ok(image);
+            }
+        }
+        return icon_picture(path, &[], size);
+    }
     if size < 256 && !std::path::Path::new(path).is_dir() {
         let inset = size.div_ceil(32);
         if let Ok(thumb) = image_factory(path, size - 2 * inset + 1, SIIGBF_THUMBNAILONLY, false) {
@@ -473,6 +487,56 @@ pub fn view_picture(path: &str, size: u32) -> Result<Rgba, String> {
         }
     }
     thumbnail(path, size)
+}
+
+pub fn view_thumbnail(path: &str, size: u32, cache_only: bool) -> Result<Rgba, String> {
+    view_thumbnail_from(path, size, cache_only, None)
+}
+
+pub fn view_thumbnail_from(
+    path: &str,
+    size: u32,
+    cache_only: bool,
+    factory: Option<&windows::Win32::UI::Shell::IShellItemImageFactory>,
+) -> Result<Rgba, String> {
+    use windows::Win32::UI::Shell::{SIIGBF_INCACHEONLY, SIIGBF_THUMBNAILONLY};
+    com_init();
+    let key = super::thumb_cache::key(path, size);
+    let flags = if cache_only {
+        SIIGBF_THUMBNAILONLY | SIIGBF_INCACHEONLY
+    } else {
+        SIIGBF_THUMBNAILONLY
+    };
+    let get = |side, keep_frame| {
+        if let Some(factory) = factory {
+            let flags = if cloud_only(path) {
+                flags | SIIGBF_INCACHEONLY
+            } else {
+                flags
+            };
+            factory_picture(factory, side, flags, keep_frame)
+        } else {
+            image_factory(path, side, flags, keep_frame)
+        }
+    };
+    let image = if size >= 256 {
+        let thumb = get(size / 2, true)?;
+        compressed_marker(
+            pixel_scale(&thumb, size),
+            path,
+            size.div_ceil(4).saturating_sub(1),
+        )
+    } else {
+        let inset = size.div_ceil(32);
+        let thumb = get(size - 2 * inset + 1, false)?;
+        compressed_marker(
+            place_bottom(&thumb, size, inset),
+            path,
+            size.div_ceil(4).saturating_sub(1),
+        )
+    };
+    super::thumb_cache::write_if_current(path, size, key, &image);
+    Ok(image)
 }
 
 pub fn library_picture(path: &str, size: u32) -> Result<Rgba, String> {
@@ -647,6 +711,11 @@ fn factory_by_id(
     only: windows::Win32::UI::Shell::SIIGBF,
 ) -> Result<Rgba, String> {
     com_init();
+    let only = if cloud_only(path) {
+        only | windows::Win32::UI::Shell::SIIGBF_INCACHEONLY
+    } else {
+        only
+    };
     if id.is_empty() {
         return image_factory(path, size, only, false);
     }
@@ -1034,6 +1103,12 @@ pub fn shell_picture(path: &str, size: u32) -> Result<Rgba, String> {
     image_factory(path, size, Default::default(), false)
 }
 pub fn gallery_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String> {
+    let flags = if cloud_only(path) {
+        windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY
+            | windows::Win32::UI::Shell::SIIGBF_INCACHEONLY
+    } else {
+        windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY
+    };
     com_init();
     if !id.is_empty() {
         unsafe {
@@ -1041,12 +1116,7 @@ pub fn gallery_picture(path: &str, id: &[u8], size: u32) -> Result<Rgba, String>
                 windows::Win32::UI::Shell::IShellItemImageFactory,
             >(id.as_ptr().cast())
             {
-                if let Ok(image) = factory_picture(
-                    &factory,
-                    size,
-                    windows::Win32::UI::Shell::SIIGBF_THUMBNAILONLY,
-                    false,
-                ) {
+                if let Ok(image) = factory_picture(&factory, size, flags, false) {
                     return Ok(image);
                 }
             }
@@ -1319,13 +1389,45 @@ fn image_factory(
     keep_frame: bool,
 ) -> Result<Rgba, String> {
     use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName};
-
+    let started = std::time::Instant::now();
+    let only = if cloud_only(path) {
+        only | windows::Win32::UI::Shell::SIIGBF_INCACHEONLY
+    } else {
+        only
+    };
     unsafe {
         let w = super::wide(path);
         let factory: IShellItemImageFactory =
             SHCreateItemFromParsingName(PCWSTR(w.as_ptr()), None).map_err(|e| e.message())?;
-        factory_picture(&factory, size, only, keep_frame)
+        let created = started.elapsed();
+        let result = factory_picture(&factory, size, only, keep_frame);
+        if thumb_probe() {
+            eprintln!("thumb-factory|thread={:?}|size={size}|flags={}|create_us={}|total_us={}|ok={}|path={path}", std::thread::current().id(), only.0, created.as_micros(), started.elapsed().as_micros(), result.is_ok());
+        }
+        result
     }
+}
+
+pub fn cloud_only(path: &str) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS, FILE_ATTRIBUTE_RECALL_ON_OPEN,
+    };
+    if path.is_empty() || path.starts_with("::") || path.starts_with("shell:") {
+        return false;
+    }
+    std::fs::metadata(path).map_or(true, |metadata| {
+        metadata.file_attributes()
+            & (FILE_ATTRIBUTE_OFFLINE.0
+                | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.0
+                | FILE_ATTRIBUTE_RECALL_ON_OPEN.0)
+            != 0
+    })
+}
+
+pub fn thumb_probe() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("NAVI_THUMB_PROBE").as_deref() == Ok("1"))
 }
 
 fn factory_picture(
@@ -1350,11 +1452,13 @@ fn factory_picture_with_flags(
     keep_frame: bool,
 ) -> Result<Rgba, String> {
     use windows::Win32::Foundation::SIZE;
+    let started = std::time::Instant::now();
     unsafe {
         let side = size as i32;
         let bitmap = factory
             .GetImage(SIZE { cx: side, cy: side }, flags)
             .map_err(|error| error.message())?;
+        let extracted = started.elapsed();
         let (w, h, pixels) = bitmap_pixels(bitmap);
         let _ = DeleteObject(HGDIOBJ::from(bitmap));
         let (w, h, pixels) = match (!keep_frame).then(|| unframe(w, h, &pixels)).flatten() {
@@ -1382,6 +1486,14 @@ fn factory_picture_with_flags(
                 }
             };
             rgba.extend_from_slice(&[un(r), un(g), un(b), a]);
+        }
+        if thumb_probe() {
+            eprintln!(
+                "thumb-pixels|size={size}|flags={}|get_us={}|pixels_us={}|width={w}|height={h}",
+                flags.0,
+                extracted.as_micros(),
+                started.elapsed().saturating_sub(extracted).as_micros()
+            );
         }
         Ok(Rgba {
             width: w as u32,

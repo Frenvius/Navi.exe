@@ -296,6 +296,7 @@ enum Request {
     Watch(notify::Event),
     WatchError(String),
     Rows(u64, Vec<usize>),
+    Extract(u64, Vec<usize>),
     Change(u64, Vec<notify::Event>, std::ops::Range<usize>),
     Refresh(u64, std::ops::Range<usize>, Option<Reveal>),
     Group(
@@ -492,6 +493,7 @@ impl Job {
         let mut queue = std::collections::VecDeque::new();
         let mut refresh_cached = cached;
         let mut retries = super::grid::Retries::default();
+        let mut picture_range = 0..usize::MAX;
         if cached && folder.order.is_empty() {
             queue.push_back(Request::Refresh(0, 0..32, None));
             refresh_cached = false;
@@ -704,7 +706,35 @@ impl Job {
                     }
                     send(Update::SearchFinished(result));
                 }
-                Request::Viewport(range) => retries.retain(range),
+                Request::Viewport(range) => {
+                    picture_range = range.clone();
+                    retries.retain(range);
+                }
+                Request::Extract(epoch, indices) => {
+                    if epoch == generation {
+                        while let Ok(next) = requests_rx.try_recv() {
+                            queue.push_back(next);
+                        }
+                        if queue.iter().any(|request| {
+                            matches!(
+                                request,
+                                Request::Viewport(_)
+                                    | Request::Mode(..)
+                                    | Request::Grid(..)
+                                    | Request::Stop
+                            ) || matches!(request, Request::Rows(other, _) if *other == epoch)
+                        }) {
+                            queue.push_back(Request::Extract(epoch, indices));
+                            continue;
+                        }
+                        let indices = indices
+                            .into_iter()
+                            .filter(|index| picture_range.contains(index))
+                            .collect();
+                        let (rows, _) = image_rows(&folder, indices, false, &items, &mut icons);
+                        send(Update::Rows(epoch, rows));
+                    }
+                }
                 Request::Retry(epoch, indices) => {
                     if epoch != generation {
                         continue;
@@ -774,6 +804,7 @@ impl Job {
                     }
                 }
                 Request::GridLabels(epoch) => {
+                    let started = std::time::Instant::now();
                     if epoch != generation {
                         continue;
                     }
@@ -781,6 +812,9 @@ impl Job {
                         continue;
                     };
                     Arc::make_mut(&mut model).measure(&folder, 128);
+                    if shell::icons::thumb_probe() {
+                        eprintln!("thumb-labels|total_us={}", started.elapsed().as_micros());
+                    }
                     let more = model.measured < folder.order.len();
                     folder.grid = Some(model.clone());
                     if !send(Update::Grid(epoch, model)) {
@@ -802,6 +836,13 @@ impl Job {
                     send(Update::WatchError(error));
                 }
                 Request::Rows(epoch, mut indices) => {
+                    if shell::icons::thumb_probe() {
+                        eprintln!(
+                            "thumb-queue|epoch={epoch}|count={}|at_ms={}",
+                            indices.len(),
+                            unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
+                        );
+                    }
                     while let Ok(next) = requests_rx.try_recv() {
                         match next {
                             Request::Rows(other, latest) if other == epoch => indices = latest,
@@ -811,11 +852,49 @@ impl Job {
                     if epoch == generation {
                         let range = indices.iter().copied().min().unwrap_or(0)
                             ..indices.iter().copied().max().map_or(0, |index| index + 1);
+                        if let Some(model) = folder.grid.as_ref().filter(|model| {
+                            model.kind == super::grid::Kind::Icons
+                                && model.spec.kind == 0
+                                && !folder.settings.icons_only
+                                && !folder
+                                    .crumbs
+                                    .last()
+                                    .is_some_and(|crumb| crate::app::ids::is_library(&crumb.id))
+                        }) {
+                            let mut cached = Vec::new();
+                            indices.retain(|&index| {
+                                let Some(&entry) = folder.order.get(index) else {
+                                    return false;
+                                };
+                                let entry = &folder.entries[entry];
+                                let size = model.spec.icon as u32;
+                                let image = (entry.is_fs
+                                    && !entry.is_dir
+                                    && !entry.is_link
+                                    && shell::thumb_cache::eligible(&entry.path, size))
+                                .then(|| shell::thumb_cache::read(&entry.path, size))
+                                .flatten()
+                                .and_then(|image| super::icons::shared(image).ok());
+                                if let Some(image) = image {
+                                    cached.push(picture_row(index, entry.icon, Some(image)));
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                            if !cached.is_empty() {
+                                send(Update::Rows(epoch, cached));
+                            }
+                        }
                         if folder.grid.is_some() && indices.len() > 8 {
                             let remaining = indices.split_off(8);
                             queue.push_back(Request::Rows(epoch, remaining));
                         }
-                        let rows = ready_rows(&folder, indices, &items, &mut icons);
+                        let (rows, extraction) =
+                            image_rows(&folder, indices, true, &items, &mut icons);
+                        if !extraction.is_empty() {
+                            queue.push_back(Request::Extract(epoch, extraction));
+                        }
                         if folder
                             .grid
                             .as_ref()
@@ -1977,14 +2056,18 @@ impl List {
         self.send(Request::Pane(token, kind, selection, width))
     }
 
-    pub fn request(&mut self, visible: std::ops::Range<usize>) -> Result<(), String> {
+    pub fn request(
+        &mut self,
+        visible: std::ops::Range<usize>,
+        priority: std::ops::Range<usize>,
+    ) -> Result<(), String> {
         if self.needed != visible {
             self.needed = visible.clone();
             self.send(Request::Viewport(visible.clone()))?;
             self.pending.clear();
             self.rows.retain(|index, _| visible.contains(index));
         }
-        let missing = visible
+        let mut missing = visible
             .filter(|i| {
                 self.folder
                     .as_ref()
@@ -1993,7 +2076,16 @@ impl List {
                     && self.pending.insert(*i)
             })
             .collect::<Vec<_>>();
+        missing.sort_by_key(|index| !priority.contains(index));
         if !missing.is_empty() {
+            if shell::icons::thumb_probe() {
+                eprintln!(
+                    "thumb-request|epoch={}|count={}|at_ms={}",
+                    self.generation,
+                    missing.len(),
+                    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
+                );
+            }
             self.send(Request::Rows(self.generation, missing))?;
         }
         Ok(())
@@ -2097,19 +2189,156 @@ fn home_cells(entry: &ShellEntry, items: &shell::columns::Items) -> Vec<String> 
     ]
 }
 
+fn image_rows(
+    folder: &Folder,
+    indices: Vec<usize>,
+    cache_only: bool,
+    items: &shell::columns::Items,
+    icons: &mut RowIcons,
+) -> (Vec<Row>, Vec<usize>) {
+    let Some(model) = folder.grid.as_ref().filter(|model| {
+        model.kind == super::grid::Kind::Icons
+            && model.spec.kind == 0
+            && !folder.settings.icons_only
+            && !folder
+                .crumbs
+                .last()
+                .is_some_and(|crumb| crate::app::ids::is_library(&crumb.id))
+    }) else {
+        return (ready_rows(folder, indices, items, icons), Vec::new());
+    };
+    let size = model.spec.icon as u32;
+    let (images, other): (Vec<_>, Vec<_>) = indices.into_iter().partition(|&index| {
+        folder.order.get(index).is_some_and(|&entry| {
+            let entry = &folder.entries[entry];
+            entry.is_fs
+                && !entry.is_dir
+                && !entry.is_link
+                && shell::thumb_cache::eligible(&entry.path, size)
+        })
+    });
+    let mut rows = ready_rows(folder, other, items, icons);
+    let mut missing = Vec::new();
+    let mut extraction = Vec::new();
+    for index in images {
+        let entry = &folder.entries[folder.order[index]];
+        if let Some(image) = shell::thumb_cache::read(&entry.path, size)
+            .and_then(|image| super::icons::shared(image).ok())
+        {
+            rows.push(picture_row(index, entry.icon, Some(image)));
+        } else {
+            if cache_only {
+                let started = std::time::Instant::now();
+                let factory = items.image_factory(&entry.path);
+                let bound = started.elapsed();
+                let image =
+                    shell::icons::view_thumbnail_from(&entry.path, size, true, factory.as_ref())
+                        .ok();
+                let extract = image.is_none() && !shell::icons::cloud_only(&entry.path);
+                let image = if image.is_none() && !extract {
+                    shell::icons::icon_picture(&entry.path, &entry.absolute, size)
+                        .ok()
+                        .or_else(|| shell::icons::icon(entry.icon, size).ok())
+                } else {
+                    image
+                };
+                if shell::icons::thumb_probe() {
+                    eprintln!(
+                        "thumb-bound|size={size}|create_us={}|total_us={}|path={}",
+                        bound.as_micros(),
+                        started.elapsed().as_micros(),
+                        entry.path
+                    );
+                }
+                if extract {
+                    extraction.push(index);
+                }
+                rows.push(picture_row(
+                    index,
+                    entry.icon,
+                    image.and_then(|image| super::icons::shared(image).ok()),
+                ));
+            } else {
+                missing.push(index);
+            }
+        }
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let completed = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for worker in 0..missing.len().min(4) {
+            let missing = &missing;
+            let next = &next;
+            let completed = &completed;
+            let run = move || {
+                shell::com_init();
+                loop {
+                    let offset = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&index) = missing.get(offset) else {
+                        break;
+                    };
+                    let entry = &folder.entries[folder.order[index]];
+                    let image = shell::icons::view_thumbnail(&entry.path, size, false).ok();
+                    let image = if image.is_none() {
+                        shell::icons::icon_picture(&entry.path, &entry.absolute, size)
+                            .ok()
+                            .or_else(|| shell::icons::icon(entry.icon, size).ok())
+                    } else {
+                        image
+                    };
+                    let image = image.and_then(|image| super::icons::shared(image).ok());
+                    if let Ok(mut completed) = completed.lock() {
+                        completed.push(picture_row(index, entry.icon, image));
+                    }
+                }
+            };
+            if let Err(error) = std::thread::Builder::new()
+                .name(format!("native-thumbs-{worker}"))
+                .spawn_scoped(scope, run)
+            {
+                eprintln!("native thumbnail worker: {error}");
+                run();
+            }
+        }
+    });
+    for row in completed
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
+    {
+        rows.push(row);
+    }
+    (rows, extraction)
+}
+
+fn picture_row(index: usize, icon: u32, image: Option<Arc<Rgba>>) -> Row {
+    Row {
+        index,
+        icon,
+        cells: Vec::new(),
+        image: None,
+        picture: Some(super::grid::Picture {
+            image,
+            fields: Vec::new(),
+            label: None,
+        }),
+    }
+}
+
 fn ready_rows(
     folder: &Folder,
     indices: Vec<usize>,
     items: &shell::columns::Items,
     icons: &mut RowIcons,
 ) -> Vec<Row> {
+    let started = std::time::Instant::now();
+    let count = indices.len();
     let keys = folder
         .columns
         .iter()
         .map(|column| column.key)
         .filter(columns::needs_property)
         .collect::<Vec<_>>();
-    indices
+    let result = indices
         .into_iter()
         .filter_map(|index| {
             let entry = &folder.entries[*folder.order.get(index)?];
@@ -2140,7 +2369,14 @@ fn ready_rows(
                     .map(|_| super::grid::picture(folder, index)),
             })
         })
-        .collect()
+        .collect();
+    if shell::icons::thumb_probe() {
+        eprintln!(
+            "thumb-rows|count={count}|total_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+    result
 }
 
 #[derive(Default)]
@@ -2229,6 +2465,62 @@ fn row_icon(entry: &ShellEntry, icons: &mut RowIcons) -> (u32, Option<Arc<Rgba>>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_thumbnail_misses_extract_in_temporary_workers_then_invalidate() {
+        use super::*;
+        shell::com_init();
+        let root =
+            std::env::temp_dir().join(format!("navi-thumbs-{}-{}", std::process::id(), unsafe {
+                windows::Win32::System::SystemInformation::GetTickCount64()
+            }));
+        std::fs::create_dir(&root).unwrap();
+        for index in 0..8u8 {
+            let mut bmp = vec![0u8; 54 + 32 * 32 * 4];
+            bmp[..2].copy_from_slice(b"BM");
+            let length = bmp.len() as u32;
+            bmp[2..6].copy_from_slice(&length.to_le_bytes());
+            bmp[10..14].copy_from_slice(&54u32.to_le_bytes());
+            bmp[14..18].copy_from_slice(&40u32.to_le_bytes());
+            bmp[18..22].copy_from_slice(&32u32.to_le_bytes());
+            bmp[22..26].copy_from_slice(&32u32.to_le_bytes());
+            bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+            bmp[28..30].copy_from_slice(&32u16.to_le_bytes());
+            for (offset, pixel) in bmp[54..].chunks_exact_mut(4).enumerate() {
+                pixel.copy_from_slice(&[index * 23, offset as u8, 180, 255]);
+            }
+            std::fs::write(root.join(format!("{index}.bmp")), bmp).unwrap();
+        }
+        let mut folder = load(root.to_str().unwrap(), None).unwrap();
+        folder.settings.icons_only = false;
+        folder.view.mode = 2;
+        folder.view.icon_size = 96;
+        folder.grid = super::super::grid::Model::new(&folder, (596.0, 559.0)).map(Arc::new);
+        let items = shell::columns::Items::new(root.to_str().unwrap(), HashMap::new());
+        let mut icons = RowIcons::default();
+        let (_, missing) = image_rows(&folder, (0..8).collect(), true, &items, &mut icons);
+        assert!(!missing.is_empty());
+        let (ready, more) = image_rows(&folder, missing.clone(), false, &items, &mut icons);
+        assert!(more.is_empty());
+        assert_eq!(ready.len(), missing.len());
+        assert!(ready.iter().all(|row| row
+            .picture
+            .as_ref()
+            .is_some_and(|picture| picture.image.is_some())));
+        for index in missing {
+            let path = &folder.entries[folder.order[index]].path;
+            let cached = shell::thumb_cache::read(path, 96).unwrap();
+            assert_eq!((cached.width, cached.height), (96, 96));
+            let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+                .unwrap();
+            assert!(shell::thumb_cache::read(path, 96).is_none());
+        }
+        for index in 0..8 {
+            std::fs::remove_file(root.join(format!("{index}.bmp"))).unwrap();
+        }
+        std::fs::remove_dir(root).unwrap();
+    }
+
     fn list_for_folder(
         folder: super::Folder,
         updates: std::sync::mpsc::Receiver<super::Update>,
@@ -3009,6 +3301,7 @@ fn network_notice(path: &str) -> Option<String> {
 }
 
 fn load(path: &str, session: Option<crate::app::view::ResolvedView>) -> Result<Folder, String> {
+    let started = std::time::Instant::now();
     let title = super::titlebar::TitleBar::new(path).map_err(|error| error.to_string())?;
     let search = crate::app::ids::search_parts(path);
     let settings_page = crate::app::ids::is_settings(path);
@@ -3019,6 +3312,7 @@ fn load(path: &str, session: Option<crate::app::view::ResolvedView>) -> Result<F
             shell::listing::list(path)?
         };
     entries.shrink_to_fit();
+    let enumerated = started.elapsed();
     super::memory::checkpoint("shell-listed");
     let view = search.map_or_else(
         || {
@@ -3095,6 +3389,14 @@ fn load(path: &str, session: Option<crate::app::view::ResolvedView>) -> Result<F
         pane_width: 302.0,
     };
     arrange(&mut folder, &items);
+    if shell::icons::thumb_probe() {
+        eprintln!(
+            "thumb-load|count={}|enumeration_us={}|total_us={}|path={path}",
+            folder.entries.len(),
+            enumerated.as_micros(),
+            started.elapsed().as_micros()
+        );
+    }
     Ok(folder)
 }
 

@@ -54,7 +54,7 @@ fn streaming_search_uses_the_list_worker_and_rejects_cancelled_batches() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while list.rows.len() != 2 {
         list.receive(&mut scroll).unwrap();
-        list.request(0..2).unwrap();
+        list.request(0..2, 0..2).unwrap();
         assert!(Instant::now() < deadline, "Details rows did not load");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -64,7 +64,7 @@ fn streaming_search_uses_the_list_worker_and_rejects_cancelled_batches() {
     let deadline = Instant::now() + Duration::from_secs(10);
     while list.rows.len() != 2 || list.rows.values().any(|row| row.picture.is_none()) {
         list.receive(&mut scroll).unwrap();
-        list.request(0..2).unwrap();
+        list.request(0..2, 0..2).unwrap();
         assert!(
             Instant::now() < deadline,
             "Content retained obsolete Details payloads"

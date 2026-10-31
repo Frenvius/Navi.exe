@@ -18,8 +18,8 @@ pub mod nav;
 pub mod nav_options;
 pub mod network;
 pub mod newmenu;
-pub mod ops;
 pub mod open_site;
+pub mod ops;
 pub mod preview;
 pub mod quick_access;
 pub mod search;
@@ -27,6 +27,7 @@ pub mod share;
 pub mod shell_windows;
 pub mod text;
 pub mod theme;
+pub mod thumb_cache;
 pub mod viewstate;
 
 use windows::core::{PCWSTR, PWSTR};

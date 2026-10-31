@@ -1245,7 +1245,18 @@ fn paint_window(hwnd: HWND) -> Result<()> {
                     )
                 },
             );
-            window.list.request(needed).map_err(|error| {
+            let priority = folder.grid.as_ref().map_or_else(
+                || needed.clone(),
+                |model| {
+                    let mut rows = model.visible(
+                        (window.scroll.x, window.scroll.y),
+                        (view.right, view.rows_height),
+                    );
+                    let first = rows.next().unwrap_or(0);
+                    first..rows.last().map_or(first + 1, |last| last + 1)
+                },
+            );
+            window.list.request(needed, priority).map_err(|error| {
                 windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error)
             })?;
         }

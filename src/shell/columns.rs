@@ -83,6 +83,14 @@ pub struct Items {
 }
 
 impl Items {
+    pub fn image_factory(
+        &self,
+        path: &str,
+    ) -> Option<windows::Win32::UI::Shell::IShellItemImageFactory> {
+        use windows::core::Interface;
+        self.item(path)?.cast().ok()
+    }
+
     pub fn new(folder: &str, children: std::collections::HashMap<String, Vec<u8>>) -> Items {
         com_init();
         let native_details = super::archive::root(folder).is_some();
