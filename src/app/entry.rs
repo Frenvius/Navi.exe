@@ -19,7 +19,7 @@ use windows::{
 };
 const DATA: usize = 0x5357454c;
 const LAUNCH_MARK: usize = 0x53574c;
-pub const USAGE:&str="navi [--new-window | --reuse-window | --new-tab] [--] <folder>\nnavi [/select,<item> | --select <item>]\nnavi --restore-session <id>";
+pub const USAGE:&str="navi [--new-window | --reuse-window | --new-tab] [--] <folder>\nnavi [/select,<item> | --select <item>]\nnavi --restore-session <id>\nnavi --unregister";
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
@@ -490,6 +490,13 @@ pub fn start() -> Result<bool, String> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         eprintln!("{USAGE}");
+        return Ok(true);
+    }
+    if args == ["--unregister"] {
+        let status = super::default_manager::status().map_err(|error| error.to_string())?;
+        if status.enabled || status.recovery {
+            super::default_manager::set_enabled(false).map_err(|error| error.to_string())?;
+        }
         return Ok(true);
     }
     let mut launch = parse(&args)?;

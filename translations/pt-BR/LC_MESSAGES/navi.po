@@ -11,6 +11,15 @@ msgstr ""
 msgid "app.title"
 msgstr "Explorador de Arquivos"
 
+msgid "app.update.available"
+msgstr "Atualizar para o Navi {} e reiniciar"
+
+msgid "app.update.installing"
+msgstr "Baixando o Navi {}..."
+
+msgid "app.update.failed"
+msgstr "Falha na atualização: {}. Clique para tentar de novo."
+
 msgid "tab.close.tip"
 msgstr "Fechar guia (Ctrl+W)"
 

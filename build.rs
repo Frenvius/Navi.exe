@@ -3,6 +3,20 @@ fn main() {
         println!("cargo:rerun-if-changed=ui/app.rc");
         println!("cargo:rerun-if-changed=ui/app.manifest");
         println!("cargo:rerun-if-changed=ui/assets/explorer.ico");
+        println!("cargo:rerun-if-changed=Cargo.toml");
+        let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        let version = std::env::var("CARGO_PKG_VERSION").unwrap();
+        let part = |name: &str| std::env::var(name).unwrap();
+        std::fs::write(
+            out_dir.join("version.h"),
+            format!(
+                "#define NAVI_VERSION_BINARY {},{},{},0\n#define NAVI_VERSION_TEXT \"{version}\\0\"\n",
+                part("CARGO_PKG_VERSION_MAJOR"),
+                part("CARGO_PKG_VERSION_MINOR"),
+                part("CARGO_PKG_VERSION_PATCH"),
+            ),
+        )
+        .expect("version header");
         let kits = std::path::Path::new(
             &std::env::var("ProgramFiles(x86)")
                 .unwrap_or_else(|_| r"C:\Program Files (x86)".into()),
@@ -20,11 +34,12 @@ fn main() {
             .map(std::path::PathBuf::from)
             .or_else(|| versions.pop().map(|p| p.join("x64/rc.exe")))
             .unwrap_or_else(|| "rc.exe".into());
-        let output =
-            std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("explorer.res");
+        let output = out_dir.join("explorer.res");
         let status = std::process::Command::new(compiler)
             .arg("/nologo")
             .arg("/c65001")
+            .arg("/i")
+            .arg(&out_dir)
             .arg("/fo")
             .arg(&output)
             .arg("ui/app.rc")
