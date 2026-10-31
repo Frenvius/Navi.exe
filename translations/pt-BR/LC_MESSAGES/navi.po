@@ -554,3 +554,45 @@ msgstr "A instalação excedeu o limite de 5 minutos."
 
 msgid "settings.zoxide.install.not-found"
 msgstr "O WinGet concluiu, mas zoxide.exe não foi localizado."
+
+msgid "settings.integrations"
+msgstr "Integrações"
+
+msgid "settings.group.startup"
+msgstr "Inicialização"
+
+msgid "settings.group.opening"
+msgstr "Abertura de pastas"
+
+msgid "settings.group.system"
+msgstr "Sistema"
+
+msgid "settings.group.tools"
+msgstr "Ferramentas"
+
+msgid "settings.startup.title"
+msgstr "Configurações de inicialização"
+
+msgid "settings.startup.description"
+msgstr "Escolha o que abrir ao iniciar o Navi."
+
+msgid "settings.startup.new-tab"
+msgstr "Abrir nova aba"
+
+msgid "settings.startup.continue"
+msgstr "Continuar de onde você parou"
+
+msgid "settings.startup.error"
+msgstr "Não foi possível ler ou salvar a configuração de inicialização: {}"
+
+msgid "settings.state.on"
+msgstr "Ativado"
+
+msgid "settings.state.off"
+msgstr "Desativado"
+
+msgid "settings.action.open"
+msgstr "Abrir"
+
+msgid "settings.action.restore"
+msgstr "Restaurar"

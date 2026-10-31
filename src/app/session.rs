@@ -45,12 +45,17 @@ pub struct Tracker {
     registered: bool,
     ending: bool,
 }
-pub fn enabled() -> bool {
-    RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced")
-        .and_then(|k| k.get_value::<u32, _>("PersistBrowsers"))
-        .unwrap_or(0)
-        != 0
+pub fn enabled() -> Result<bool, String> {
+    super::launch_preferences::Startup::read()
+        .map(|value| value == super::launch_preferences::Startup::Continue)
+        .map_err(|error| error.to_string())
+}
+
+fn automatic(launch: &super::entry::Launch) -> bool {
+    (launch.startup || launch.mode == super::entry::Mode::Default)
+        && launch.path.is_none()
+        && launch.select.is_none()
+        && launch.restore.is_none()
 }
 struct Lock(HANDLE);
 impl Lock {
@@ -236,14 +241,11 @@ pub fn claim(
     let _lock = lock()?;
     let key = session_key()?;
     let old = records(&key);
-    let on = enabled();
+    let on = enabled()?;
     let chosen = if on {
         if let Some(id) = &launch.restore {
             old.iter().find(|(name, _)| name == id).cloned()
-        } else if launch.mode == super::entry::Mode::Default
-            && launch.path.is_none()
-            && !old.iter().any(|(_, record)| live(record))
-        {
+        } else if automatic(launch) && !old.iter().any(|(_, record)| live(record)) {
             old.first().cloned()
         } else {
             None
@@ -301,7 +303,7 @@ pub fn release_claim(id: &str) -> Result<(), String> {
 
 impl Tracker {
     pub fn checkpoint(&mut self, window: Window) -> Result<(), String> {
-        let on = enabled();
+        let on = enabled()?;
         if self.registered != on {
             unsafe {
                 if on {
@@ -349,7 +351,7 @@ impl Tracker {
 
     pub fn finish(&mut self, window: Window) -> Result<(), String> {
         self.checkpoint(window)?;
-        if !enabled() || self.ending {
+        if !enabled()? || self.ending {
             return Ok(());
         }
         let _lock = lock()?;
@@ -406,5 +408,27 @@ mod tests {
         r = record();
         r.window.bounds[2] = i32::MAX;
         assert!(decode(&serde_json::to_string(&r).unwrap()).is_none());
+    }
+
+    #[test]
+    fn automatic_restore_preserves_startup_intent_after_broker_routing() {
+        use crate::app::entry::{Launch, Mode};
+        assert!(automatic(&Launch::default()));
+        for mode in [Mode::NewTab, Mode::NewWindow] {
+            let mut launch = Launch {
+                mode,
+                startup: true,
+                ..Default::default()
+            };
+            assert!(automatic(&launch));
+            launch.startup = false;
+            assert!(!automatic(&launch));
+            launch.startup = true;
+            launch.path = Some(r"C:\Windows".into());
+            assert!(!automatic(&launch));
+            launch.path = None;
+            launch.restore = Some("window-explicit".into());
+            assert!(!automatic(&launch));
+        }
     }
 }

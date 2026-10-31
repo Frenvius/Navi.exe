@@ -3,6 +3,38 @@ use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const ROOT: &str = r"Software\Navi";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Startup {
+    #[default]
+    NewTab = 0,
+    Continue = 1,
+}
+
+impl Startup {
+    pub fn read() -> io::Result<Self> {
+        match RegKey::predef(HKEY_CURRENT_USER).open_subkey(ROOT) {
+            Ok(key) => Self::read_from(&key),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn read_from(key: &RegKey) -> io::Result<Self> {
+        match key.get_value::<u32, _>("StartupMode") {
+            Ok(0) => Ok(Self::NewTab),
+            Ok(1) => Ok(Self::Continue),
+            Ok(_) => Err(io::Error::new(io::ErrorKind::InvalidData, "StartupMode")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn save(self) -> io::Result<()> {
+        let (key, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(ROOT)?;
+        key.set_value("StartupMode", &(self as u32))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Destination {
     NewTab = 0,
@@ -120,5 +152,25 @@ mod tests {
         key.set_value(Source::WinE.value(), &9u32).unwrap();
         assert!(Preferences::read_from(&key).is_err());
         drop(key);
+    }
+
+    #[test]
+    fn startup_is_independent_and_rejects_invalid_values() {
+        let path = format!(r"Software\NaviStartupTest-{}", std::process::id());
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        let (key, _) = root.create_subkey(&path).unwrap();
+        assert_eq!(Startup::read_from(&key).unwrap(), Startup::NewTab);
+        key.set_value("StartupMode", &1u32).unwrap();
+        assert_eq!(Startup::read_from(&key).unwrap(), Startup::Continue);
+        assert_eq!(
+            Preferences::read_from(&key).unwrap(),
+            Preferences::default()
+        );
+        key.set_value("StartupMode", &2u32).unwrap();
+        assert!(Startup::read_from(&key).is_err());
+        key.set_value("StartupMode", &"invalid").unwrap();
+        assert!(Startup::read_from(&key).is_err());
+        drop(key);
+        root.delete_subkey(path).unwrap();
     }
 }

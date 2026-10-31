@@ -576,3 +576,45 @@ msgstr "Installation exceeded the 5 minute time limit."
 
 msgid "settings.zoxide.install.not-found"
 msgstr "WinGet finished, but zoxide.exe could not be located."
+
+msgid "settings.integrations"
+msgstr "Integrations"
+
+msgid "settings.group.startup"
+msgstr "Startup"
+
+msgid "settings.group.opening"
+msgstr "Opening folders"
+
+msgid "settings.group.system"
+msgstr "System"
+
+msgid "settings.group.tools"
+msgstr "Tools"
+
+msgid "settings.startup.title"
+msgstr "Startup settings"
+
+msgid "settings.startup.description"
+msgstr "Choose what opens when Navi starts."
+
+msgid "settings.startup.new-tab"
+msgstr "Open a new tab"
+
+msgid "settings.startup.continue"
+msgstr "Continue where you left off"
+
+msgid "settings.startup.error"
+msgstr "Could not read or save the startup setting: {}"
+
+msgid "settings.state.on"
+msgstr "On"
+
+msgid "settings.state.off"
+msgstr "Off"
+
+msgid "settings.action.open"
+msgstr "Open"
+
+msgid "settings.action.restore"
+msgstr "Restore"

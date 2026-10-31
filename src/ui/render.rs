@@ -456,7 +456,7 @@ impl Renderer {
                 })?;
             }
             if resized || damage.all || damage.pane || damage.view {
-                self.update(&mut surface.pane, None, dpi, &theme.pane, |canvas| {
+                self.update(&mut surface.pane, None, dpi, &theme.settings_background, |canvas| {
                     super::settings::draw(
                         settings,
                         canvas,

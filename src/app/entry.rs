@@ -35,6 +35,7 @@ pub struct Launch {
     pub path: Option<String>,
     pub select: Option<String>,
     pub restore: Option<String>,
+    pub startup: bool,
 }
 impl Launch {
     fn delivery_mode(&self, preferences: super::launch_preferences::Preferences) -> Mode {
@@ -500,6 +501,10 @@ pub fn start() -> Result<bool, String> {
         return Ok(true);
     }
     let mut launch = parse(&args)?;
+    launch.startup = launch.mode == Mode::Default
+        && launch.path.is_none()
+        && launch.select.is_none()
+        && launch.restore.is_none();
     if launch.shell_open {
         if let Some(path) = launch.path.as_deref() {
             if !shell_supported(path) {

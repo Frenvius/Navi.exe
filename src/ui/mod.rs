@@ -54,6 +54,7 @@ mod text_run;
 pub mod theme;
 mod titlebar;
 mod tooltip;
+mod toggle;
 mod update;
 
 use std::cell::RefCell;
@@ -578,6 +579,7 @@ unsafe extern "system" fn window_proc(
             return LRESULT(0);
         }
         WM_NCMOUSEMOVE => {
+            settings::leave(hwnd);
             panes::leave(hwnd);
             navigation_input::leave(hwnd);
             address_input::leave(hwnd);
@@ -646,6 +648,7 @@ unsafe extern "system" fn window_proc(
             }
         }
         WM_NCMOUSELEAVE | WM_MOUSELEAVE => {
+            settings::leave(hwnd);
             tooltip::dismiss(hwnd);
             navigation_input::leave(hwnd);
             address_input::leave(hwnd);
@@ -720,6 +723,7 @@ unsafe extern "system" fn window_proc(
                 || drop::timer(hwnd, wparam.0)
                 || tab_transfer::timer(hwnd, wparam.0)
                 || panes::timer(hwnd, wparam.0)
+                || settings::timer(hwnd, wparam.0)
                 || grid::timer(hwnd, wparam.0)
                 || tabs_input::timer(hwnd, wparam.0)
                 || navigation_input::timer(hwnd, wparam.0)
@@ -888,7 +892,7 @@ unsafe extern "system" fn window_proc(
             } else {
                 tabs_input::cancel(hwnd);
             }
-            settings::cancel();
+            settings::cancel(hwnd);
             panes::cancel(hwnd);
             navigation_input::cancel(hwnd);
             address_input::cancel(hwnd);
@@ -939,7 +943,7 @@ unsafe extern "system" fn window_proc(
             }
         }
         WM_LBUTTONDBLCLK => {
-            if settings::active() && client_point(hwnd, lparam).1 >= 88.0 {
+            if settings::press(hwnd, client_point(hwnd, lparam)) {
                 return LRESULT(0);
             }
             if navigation_input::double_click(hwnd, client_point(hwnd, lparam)) {
