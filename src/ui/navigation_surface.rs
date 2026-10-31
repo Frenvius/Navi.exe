@@ -4,7 +4,9 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_ALPHA_MODE_IGNORE;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED,
+};
 
 use super::navigation::{Hit, State};
 use super::render::{Canvas, Layer, Renderer};
@@ -91,6 +93,7 @@ pub struct Surface {
     assets: Assets,
     bars: super::bars::Assets,
     pub rows_drawn: usize,
+    rename: Option<(Layer, Option<u64>)>,
 }
 
 impl Surface {
@@ -124,6 +127,7 @@ impl Surface {
                 assets: Default::default(),
                 bars: Default::default(),
                 rows_drawn: 0,
+                rename: None,
             })
         }
     }
@@ -151,6 +155,54 @@ impl Surface {
             return Ok(());
         }
         self.assets.prepare(&renderer.canvas, state, theme, dpi)?;
+        if let Some((origin, serial, image)) = super::rename::tree_image() {
+            if self.rename.is_none() {
+                let layer = renderer.layer(DXGI_ALPHA_MODE_PREMULTIPLIED)?;
+                unsafe {
+                    self.root.AddVisual(&layer.visual, true, Some(&self.left))?;
+                }
+                self.rename = Some((layer, None));
+            }
+            let (layer, key) = self.rename.as_mut().unwrap();
+            if *key != Some(serial) {
+                layer.resize((image.width, image.height))?;
+                renderer.update(layer, None, dpi, &theme.content, |canvas| {
+                    let bitmap = canvas.system_icon(&image)?;
+                    unsafe {
+                        canvas.context.DrawBitmap(
+                            &bitmap,
+                            Some(&super::address::rect(
+                                0.0,
+                                0.0,
+                                image.width as f32 / scale,
+                                image.height as f32 / scale,
+                            )),
+                            1.0,
+                            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                            None,
+                            None,
+                        );
+                    }
+                    Ok(())
+                })?;
+                *key = Some(serial);
+            }
+            unsafe {
+                layer.visual.SetOffsetX2(origin.0 * scale)?;
+                layer.visual.SetOffsetY2(origin.1 * scale)?;
+                layer.visual.SetClip2(&D2D_RECT_F {
+                    left: 0.0,
+                    top: 0.0,
+                    right: ((state.content_width() + 2.0 - origin.0) * scale).max(0.0),
+                    bottom: image.height as f32,
+                })?;
+            }
+        } else if let Some((layer, _)) = self.rename.take() {
+            unsafe {
+                self.root.RemoveVisual(&layer.visual)?;
+                layer.surface.Trim(Some(&[]))?;
+            }
+        }
         let resized = self.rows.resize((
             (state.content_width() * scale).round().max(1.0) as u32,
             (((state.tree.rows.len() + 2) as f32 * state.metrics().0 + state.metrics().1)
@@ -166,7 +218,8 @@ impl Surface {
             left: 0,
             top: (state.offset() * scale).round() as i32,
             right: self.rows.size.0 as i32,
-            bottom: ((state.offset() + state.height) * scale).round() as i32,
+            bottom: (((state.offset() + state.height) * scale).round() as i32)
+                .min(self.rows.size.1 as i32),
         };
         self.rows_drawn = 0;
         let previous = self.valid;
@@ -432,7 +485,7 @@ fn draw_rows(
             right: state.content_width() - if pinned { 25.0 } else { 0.0 },
             bottom: y + pitch,
         };
-        if clip.right > clip.left {
+        if clip.right > clip.left && !super::rename::tree_active(&node.node.id) {
             let layout = text.layout(&node.node.name, DIRECTUI, 4096.0)?;
             unsafe {
                 canvas

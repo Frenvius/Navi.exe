@@ -28,11 +28,24 @@ struct Editor {
     paths: Vec<String>,
     original: String,
     multiline: bool,
+    tree: bool,
     width: i32,
     layout: Layout,
     bounds: (i32, i32, i32, i32),
     origin: (f32, f32),
     image: Option<std::sync::Arc<crate::shell::icons::Rgba>>,
+}
+
+struct Geometry {
+    original: String,
+    directory: bool,
+    parent: String,
+    paths: Vec<String>,
+    position: (f32, f32, f32),
+    multiline: bool,
+    layout: Layout,
+    origin: (f32, f32),
+    tree: bool,
 }
 thread_local! {
     static EDITOR: RefCell<Option<Editor>> = const { RefCell::new(None) };
@@ -50,7 +63,9 @@ pub fn is_control(hwnd: HWND) -> bool {
 pub fn active(path: &str) -> bool {
     EDITOR.with(|slot| {
         slot.borrow().as_ref().is_some_and(|editor| {
-            editor.owner == super::context::hwnd() && crate::app::ids::same(&editor.path, path)
+            !editor.tree
+                && editor.owner == super::context::hwnd()
+                && crate::app::ids::same(&editor.path, path)
         })
     })
 }
@@ -59,7 +74,7 @@ pub fn selected() -> Option<usize> {
     EDITOR.with(|slot| {
         slot.borrow()
             .as_ref()
-            .filter(|editor| editor.owner == super::context::hwnd())
+            .filter(|editor| !editor.tree && editor.owner == super::context::hwnd())
             .map(|editor| editor.paths.len())
     })
 }
@@ -78,7 +93,9 @@ pub fn can_undo() -> bool {
 
 pub fn begin(owner: HWND, path: &str) -> Result<()> {
     cancel_pending(owner);
-    finish(EditEnd::Commit);
+    if !finish(EditEnd::Commit) {
+        return Ok(());
+    }
     super::input::cancel(owner);
     super::tooltip::suppress(owner);
     super::WINDOW.with(|slot| {
@@ -230,6 +247,35 @@ pub fn begin(owner: HWND, path: &str) -> Result<()> {
     else {
         return Ok(());
     };
+    start(
+        owner,
+        path,
+        Geometry {
+            original,
+            directory,
+            parent,
+            paths,
+            position: (x, y, width),
+            multiline,
+            layout,
+            origin,
+            tree: false,
+        },
+    )
+}
+
+fn start(owner: HWND, path: &str, geometry: Geometry) -> Result<()> {
+    let Geometry {
+        original,
+        directory,
+        parent,
+        paths,
+        position: (x, y, width),
+        multiline,
+        layout,
+        origin,
+        tree,
+    } = geometry;
     let scale = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(owner) } as f32 / 96.0;
     let lines = if multiline {
         crate::shell::text::icon_label(&original, (width - 6.0).max(1.0) as i32)
@@ -248,8 +294,15 @@ pub fn begin(owner: HWND, path: &str) -> Result<()> {
     );
     let control = super::edit::Label::new(
         owner,
-        (bounds.0 + 1, bounds.1 + 2, bounds.2, bounds.3),
-        if multiline {
+        (
+            bounds.0 + i32::from(!tree),
+            bounds.1 + if tree { 0 } else { 2 },
+            bounds.2,
+            bounds.3,
+        ),
+        if tree {
+            super::edit::LabelLayout::Tree
+        } else if multiline {
             super::edit::LabelLayout::Paragraph
         } else {
             super::edit::LabelLayout::Line
@@ -277,6 +330,7 @@ pub fn begin(owner: HWND, path: &str) -> Result<()> {
             paths,
             original: original.clone(),
             multiline,
+            tree,
             width: bounds.2,
             layout,
             bounds,
@@ -299,8 +353,165 @@ pub fn begin(owner: HWND, path: &str) -> Result<()> {
     let mut snapshot = super::edit::snapshot(hwnd);
     snapshot.kind = super::edit::Kind::Programmatic;
     changed(snapshot);
-    invalidate(owner);
+    invalidate(owner, tree);
     Ok(())
+}
+
+pub fn tree_active(path: &str) -> bool {
+    EDITOR.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|editor| {
+            editor.tree
+                && editor.owner == super::context::hwnd()
+                && crate::app::ids::same(&editor.path, path)
+        })
+    })
+}
+
+pub fn tree(owner: HWND) -> Result<()> {
+    cancel_pending(owner);
+    if !finish(EditEnd::Commit) {
+        return Ok(());
+    }
+    super::input::cancel(owner);
+    super::tooltip::suppress(owner);
+    let geometry = super::WINDOW.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let window = slot.as_mut()?;
+        let state = &mut window.navigation;
+        let row = state.selected?;
+        let entry = state.tree.rows.get(row)?;
+        let depth = entry.depth;
+        let node = state.tree.node(&entry.reference)?.node.clone();
+        if !node.is_fs || crate::app::ids::is_drive_root(&node.id) {
+            return None;
+        }
+        let parent = std::path::Path::new(&node.id)
+            .parent()?
+            .to_str()?
+            .to_owned();
+        state.reveal(row, row);
+        let (pitch, margin) = state.metrics();
+        let x = depth as f32 * 8.0 + if state.compact { 42.0 } else { 50.0 };
+        let y = super::details::top() + margin + row as f32 * pitch - state.offset()
+            + ((pitch - 19.0) / 2.0).floor();
+        let width = crate::shell::columns::widths([node.name.as_str()])[0] + 19.0;
+        Some((
+            node.id.clone(),
+            Geometry {
+                original: node.name,
+                directory: true,
+                parent,
+                paths: vec![node.id],
+                position: (x, y, width),
+                multiline: false,
+                layout: Layout::Line { right: i32::MAX },
+                origin: (x, y - super::details::top()),
+                tree: true,
+            },
+        ))
+    });
+    if let Some((path, geometry)) = geometry {
+        start(owner, &path, geometry)?;
+    }
+    Ok(())
+}
+
+pub fn relocate(owner: HWND, moves: &[(String, String)]) -> Result<()> {
+    let changed = super::WINDOW.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .is_some_and(|window| window.navigation.renamed(moves, &window.navigation_worker))
+    });
+    if changed {
+        super::navigation_input::invalidate(owner);
+    }
+    let target = super::WINDOW.with(|slot| {
+        let slot = slot.borrow();
+        let window = slot.as_ref()?;
+        let path = window.tabs.active().location.tab.path();
+        moves.iter().find_map(|(from, to)| {
+            if crate::app::ids::same(path, from) {
+                Some((to.clone(), window.chrome.focus))
+            } else {
+                let prefix = path.get(..from.len())?;
+                let suffix = path.get(from.len()..)?;
+                (crate::app::ids::same(prefix, from) && suffix.starts_with(['\\', '/']))
+                    .then(|| (format!("{to}{suffix}"), window.chrome.focus))
+            }
+        })
+    });
+    if let Some((path, focus)) = target {
+        super::navigate(owner, super::Navigation::Relocate(path))?;
+        if focus == super::chrome::Focus::Tree {
+            super::chrome::set_focus(owner, focus);
+        }
+    }
+    Ok(())
+}
+
+fn adjacent(reverse: bool) {
+    let tree = EDITOR.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .filter(|editor| editor.tree)
+            .map(|editor| editor.owner)
+    });
+    if let Some(owner) = tree {
+        if finish(EditEnd::Commit) {
+            super::chrome::set_focus(owner, super::chrome::Focus::Tree);
+            super::chrome::key(owner, 0x09);
+        }
+        return;
+    }
+    let target = EDITOR.with(|editor| {
+        let editor = editor.borrow();
+        let editor = editor.as_ref()?;
+        if editor.tree {
+            return None;
+        }
+        super::WINDOW.with(|slot| {
+            let slot = slot.borrow();
+            let window = slot.as_ref()?;
+            let folder = window.list.folder.as_ref()?;
+            let current = folder.order.iter().position(|&index| {
+                crate::app::ids::same(&folder.entries[index].path, &editor.path)
+            })?;
+            let count = folder.order.len();
+            (1..=count).find_map(|step| {
+                let row = (current + if reverse { count - step } else { step }) % count;
+                let entry = &folder.entries[folder.order[row]];
+                entry.can_rename.then(|| (editor.owner, entry.path.clone()))
+            })
+        })
+    });
+    let Some((owner, path)) = target else {
+        return;
+    };
+    if !finish(EditEnd::Commit) {
+        return;
+    }
+    super::WINDOW.with(|slot| {
+        if let Some(window) = slot.borrow_mut().as_mut() {
+            window.list.pending_selection = None;
+            if let Some(folder) = &window.list.folder {
+                if let Some(row) = folder
+                    .order
+                    .iter()
+                    .position(|&index| crate::app::ids::same(&folder.entries[index].path, &path))
+                {
+                    window.list.interaction.selection.move_to(
+                        &folder.order,
+                        &folder.entries,
+                        row,
+                        crate::app::selection::Modifiers::default(),
+                    );
+                }
+            }
+        }
+    });
+    if let Err(error) = begin(owner, &path) {
+        super::fail(error);
+    }
 }
 
 pub fn focused(owner: HWND) {
@@ -345,7 +556,7 @@ pub fn changed(snapshot: super::edit::Snapshot) {
         let natural = (crate::shell::columns::widths_at(
             [editor.state.text.as_str()],
             (12.0 * scale).round() as i32,
-        )[0] + 37.0 * scale)
+        )[0] + if editor.tree { 19.0 } else { 37.0 } * scale)
             .ceil() as i32;
         let (left, width) = match editor.layout {
             Layout::Stacked => (editor.bounds.0, editor.width),
@@ -370,9 +581,10 @@ pub fn changed(snapshot: super::edit::Snapshot) {
             editor.control.hwnd,
             editor.bounds,
             editor.multiline,
+            editor.tree,
         ))
     });
-    let Some((owner, hwnd, bounds, multiline)) = control else {
+    let Some((owner, hwnd, bounds, multiline, tree)) = control else {
         return;
     };
     let scale = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) } as f32 / 96.0;
@@ -380,8 +592,8 @@ pub fn changed(snapshot: super::edit::Snapshot) {
         SetWindowPos(
             hwnd,
             None,
-            bounds.0 + 1,
-            bounds.1 + 2,
+            bounds.0 + i32::from(!tree),
+            bounds.1 + if tree { 0 } else { 2 },
             bounds.2,
             bounds.3,
             SWP_NOZORDER | SWP_NOACTIVATE,
@@ -432,7 +644,7 @@ pub fn changed(snapshot: super::edit::Snapshot) {
             editor.bounds.3 = height;
         }
     });
-    let result = super::edit::raster_label(hwnd, bounds.2, height);
+    let result = super::edit::raster_label(hwnd, bounds.2, height, tree);
     match result {
         Ok(image) => EDITOR.with(|slot| {
             if let Some(editor) = slot.borrow_mut().as_mut() {
@@ -441,14 +653,22 @@ pub fn changed(snapshot: super::edit::Snapshot) {
         }),
         Err(error) => eprintln!("rename raster: {error}"),
     }
-    invalidate(owner);
+    invalidate(owner, tree);
 }
 
 pub fn image() -> Option<((f32, f32), u64, std::sync::Arc<crate::shell::icons::Rgba>)> {
+    image_for(false)
+}
+
+pub fn tree_image() -> Option<((f32, f32), u64, std::sync::Arc<crate::shell::icons::Rgba>)> {
+    image_for(true)
+}
+
+fn image_for(tree: bool) -> Option<((f32, f32), u64, std::sync::Arc<crate::shell::icons::Rgba>)> {
     EDITOR.with(|slot| {
         slot.borrow()
             .as_ref()
-            .filter(|editor| editor.owner == super::context::hwnd())
+            .filter(|editor| editor.tree == tree && editor.owner == super::context::hwnd())
             .and_then(|editor| Some((editor.origin, editor.serial, editor.image.clone()?)))
     })
 }
@@ -467,9 +687,10 @@ pub fn caret() -> Option<(
             editor.serial,
             editor.bounds,
             editor.image.clone()?,
+            editor.tree,
         ))
     })?;
-    let (owner, control, revision, bounds, image) = data;
+    let (owner, control, revision, bounds, image, tree) = data;
     unsafe {
         if windows::Win32::UI::Input::KeyboardAndMouse::GetFocus() != control
             || GetForegroundWindow() != owner
@@ -482,7 +703,7 @@ pub fn caret() -> Option<(
         }
         let scale = windows::Win32::UI::HiDpi::GetDpiForWindow(owner) as f32 / 96.0;
         let x = (point.x + 1).clamp(0, image.width.saturating_sub(1) as i32);
-        let y = point.y + 2;
+        let y = point.y + if tree { 1 } else { 2 };
         let height = (15.0 * scale).round().max(1.0) as u32;
         let mut pixels = Vec::with_capacity(height as usize * 4);
         for offset in 0..height {
@@ -501,6 +722,16 @@ pub fn caret() -> Option<(
             1.0 / scale,
             height as f32 / scale,
         );
+        if tree {
+            let right = super::WINDOW.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .map_or(0.0, |window| window.navigation.content_width() + 2.0)
+            });
+            if rect.left >= right {
+                return None;
+            }
+        }
         Some((
             revision,
             rect,
@@ -513,7 +744,16 @@ pub fn caret() -> Option<(
     }
 }
 
-fn invalidate(owner: HWND) {
+fn invalidate(owner: HWND, tree: bool) {
+    if tree {
+        super::WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow_mut().as_mut() {
+                window.navigation.changed();
+            }
+        });
+        super::navigation_input::invalidate(owner);
+        return;
+    }
     super::WINDOW.with(|slot| {
         if let Some(window) = slot.borrow_mut().as_mut() {
             window.list.interaction.mark_all();
@@ -529,10 +769,10 @@ enum EditEnd {
     Cancel,
 }
 
-fn finish(end: EditEnd) {
+fn finish(end: EditEnd) -> bool {
     let editor = EDITOR.with(|slot| slot.borrow_mut().take());
     let Some(editor) = editor else {
-        return;
+        return true;
     };
     let _context = super::context::enter(editor.owner);
     if matches!(end, EditEnd::Commit | EditEnd::Blur) {
@@ -568,27 +808,36 @@ fn finish(end: EditEnd) {
                 unsafe {
                     let _ = SetFocus(Some(hwnd));
                 }
-                return;
+                return false;
             }
             if !result.done.is_empty() {
                 let paths = result.done.iter().map(|(_, path)| path.clone()).collect();
+                let moves = result.done.clone();
                 super::menu_actions::push(
                     editor.owner,
                     crate::app::undo::Undo::Rename(result.done),
                 );
                 let result = super::WINDOW.with(|slot| {
                     slot.borrow_mut().as_mut().map_or(Ok(()), |window| {
-                        window.list.refresh(&window.scroll)?;
-                        window.list.select_created(paths, &mut window.scroll)
+                        if editor.tree {
+                            Ok(())
+                        } else {
+                            window.list.refresh(&window.scroll)?;
+                            window.list.select_created(paths, &mut window.scroll)
+                        }
                     })
                 });
                 if let Err(error) = result {
                     eprintln!("native rename refresh: {error}");
                 }
+                if let Err(error) = relocate(editor.owner, &moves) {
+                    super::fail(error);
+                }
             }
         }
     }
     let owner = editor.owner;
+    let tree = editor.tree;
     drop(editor);
     unsafe {
         if let Err(error) = RemovePropW(owner, w!("NativeRenameControl")) {
@@ -598,7 +847,11 @@ fn finish(end: EditEnd) {
             let _ = SetFocus(Some(owner));
         }
     }
-    invalidate(owner);
+    invalidate(owner, tree);
+    if tree && matches!(end, EditEnd::Commit) {
+        super::chrome::set_focus(owner, super::chrome::Focus::List);
+    }
+    true
 }
 
 struct Click {
@@ -733,7 +986,11 @@ pub fn released(owner: HWND) {
 }
 
 pub fn blur() {
-    if selected().is_some() {
+    if EDITOR.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|editor| editor.owner == super::context::hwnd())
+    }) {
         finish(EditEnd::Blur);
     }
 }
@@ -788,11 +1045,26 @@ pub fn owner_message(owner: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) 
                         .image
                         .as_ref()
                         .map_or(editor.bounds.3, |image| image.height as i32),
+                    editor.tree,
                 )
             })
     });
-    let Some((control, bounds, height)) = data else {
+    let Some((control, bounds, height, tree)) = data else {
         return None;
+    };
+    let right = if tree {
+        let scale = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(owner) } as f32 / 96.0;
+        super::WINDOW
+            .with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .map_or(bounds.0 + bounds.2, |window| {
+                        ((window.navigation.content_width() + 2.0) * scale).round() as i32
+                    })
+            })
+            .min(bounds.0 + bounds.2)
+    } else {
+        bounds.0 + bounds.2
     };
     if matches!(
         message,
@@ -800,13 +1072,13 @@ pub fn owner_message(owner: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) 
     ) {
         let point = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
         if point.0 >= bounds.0
-            && point.0 < bounds.0 + bounds.2
+            && point.0 < right
             && point.1 >= bounds.1
             && point.1 < bounds.1 + height
         {
             let local = LPARAM(
-                (((point.1 - bounds.1 - 2) as u32) << 16 | (point.0 - bounds.0 - 1) as u32 & 0xffff)
-                    as isize,
+                (((point.1 - bounds.1 - if tree { 1 } else { 2 }) as u32) << 16
+                    | (point.0 - bounds.0 - 1) as u32 & 0xffff) as isize,
             );
             return Some(unsafe { SendMessageW(control, message, Some(wparam), Some(local)) });
         }
@@ -828,7 +1100,7 @@ pub fn owner_message(owner: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) 
             if GetCursorPos(&mut point).is_ok()
                 && ScreenToClient(owner, &mut point).as_bool()
                 && point.x >= bounds.0
-                && point.x < bounds.0 + bounds.2
+                && point.x < right
                 && point.y >= bounds.1
                 && point.y < bounds.1 + height
             {
@@ -843,7 +1115,7 @@ pub fn owner_message(owner: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) 
         finish(EditEnd::Cancel);
     }
     if message == WM_CTLCOLOREDIT && lparam.0 == control.0 as isize {
-        let dark = crate::shell::theme::dark();
+        let dark = !tree && crate::shell::theme::dark();
         let background = if dark { 0x212121 } else { 0xffffff };
         let foreground = if dark { 0xffffff } else { 0 };
         unsafe {
@@ -862,6 +1134,14 @@ pub fn edit_message(hwnd: HWND, message: u32, wparam: WPARAM, _lparam: LPARAM) -
         return None;
     }
     if message == WM_KEYDOWN && !super::edit::composing(hwnd) {
+        let modifiers = super::input::modifiers();
+        if wparam.0 == 0x09
+            && !modifiers.ctrl
+            && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) >= 0 }
+        {
+            adjacent(modifiers.shift);
+            return Some(LRESULT(0));
+        }
         match wparam.0 {
             0x0d => {
                 finish(EditEnd::Commit);

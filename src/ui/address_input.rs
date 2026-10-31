@@ -637,6 +637,31 @@ pub fn edit_key(hwnd: HWND, control: HWND, key: u32) -> bool {
             .as_ref()
             .is_some_and(|window| window.editors.address == control)
     });
+    let modifiers = super::input::modifiers();
+    let alt = unsafe { GetKeyState(0x12) < 0 };
+    if !composing {
+        if super::panes::key(hwnd, key) {
+            return true;
+        }
+        if !alt
+            && (modifiers.ctrl && key == 0x52
+                || modifiers.ctrl && modifiers.shift && key == 0x45
+                || key == 0x79 && !modifiers.ctrl && !modifiers.shift)
+        {
+            return super::input::global_key(hwnd, key);
+        }
+        if address && key == 0x73 && !alt && !modifiers.ctrl && !modifiers.shift {
+            WINDOW.with(|slot| {
+                if let Some(window) = slot.borrow_mut().as_mut() {
+                    window.address.generation += 1;
+                    window.address.suggestion = None;
+                    window.address.suggestions = window.address.typed_paths.clone();
+                }
+            });
+            show_suggestions(hwnd);
+            return true;
+        }
+    }
     if key == 0x74 && !composing {
         return self::key(hwnd, key);
     }
@@ -671,8 +696,6 @@ pub fn edit_key(hwnd: HWND, control: HWND, key: u32) -> bool {
         super::chrome::key(hwnd, key);
         return true;
     }
-    let modifiers = super::input::modifiers();
-    let alt = unsafe { GetKeyState(0x12) < 0 };
     if (modifiers.ctrl && !alt && matches!(key, 0x4c | 0x45 | 0x46))
         || (alt && !modifiers.ctrl && key == 0x44)
         || (matches!(key, 0x72 | 0x73) && !alt && !modifiers.ctrl)

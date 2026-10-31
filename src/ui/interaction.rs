@@ -29,6 +29,7 @@ pub struct State {
     pub group_focus: Option<String>,
     pub group_hover: Option<String>,
     pub group_action: Option<Action>,
+    pub cell: usize,
     control_pressed: bool,
     pub has_focus: bool,
     pub active: bool,
@@ -54,6 +55,7 @@ impl Default for State {
             group_focus: None,
             group_hover: None,
             group_action: None,
+            cell: 0,
             control_pressed: false,
             has_focus: false,
             active: true,
@@ -73,6 +75,7 @@ impl Default for State {
 
 impl State {
     pub fn restore_view(&mut self, folder: &Folder) {
+        self.cell = 0;
         self.selection.restored(&folder.order, &folder.entries);
         self.group_focus = if self.selection.selected.is_empty() {
             folder
@@ -306,6 +309,7 @@ impl State {
         };
         self.pointer = Some(point);
         self.has_focus = true;
+        self.cell = 0;
         self.hover_pending = false;
         if let Some(index) = self.header_at(folder, view, scroll) {
             let header = &folder.layout.headers[index];
@@ -571,6 +575,27 @@ impl State {
                     },
                 ));
             }
+        }
+        if folder.grid.is_none() && matches!(key, 0x25 | 0x27) && self.group_focus.is_none() {
+            self.cell = if key == 0x25 {
+                self.cell.saturating_sub(1)
+            } else {
+                (self.cell + 1).min(folder.columns.len().saturating_sub(1))
+            };
+            if let Some(column) = folder.columns.get(self.cell) {
+                let left = folder.columns[..self.cell]
+                    .iter()
+                    .map(|column| column.width)
+                    .sum::<f32>();
+                let right = left + column.width;
+                if left < scroll.x {
+                    scroll.x = left;
+                } else if right > scroll.x + view.right {
+                    scroll.x = (right - view.right).min(view.maximum_x());
+                }
+            }
+            self.mark_all();
+            return None;
         }
         if let Some(model) = &folder.grid {
             if matches!(key, 0x21..=0x28) {

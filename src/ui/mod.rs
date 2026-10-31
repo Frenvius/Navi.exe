@@ -408,6 +408,9 @@ unsafe extern "system" fn window_proc(
         context::register(hwnd);
     }
     let _context = context::enter(hwnd);
+    if chrome::alt_message(hwnd, message, wparam.0) {
+        return LRESULT(0);
+    }
     if let Some(result) = launch::message(hwnd, message, wparam, lparam) {
         return result;
     }
@@ -946,6 +949,7 @@ unsafe extern "system" fn window_proc(
         WM_KEYDOWN | WM_SYSKEYDOWN
             if settings::key(hwnd, wparam.0 as u32)
                 || hosted::key(hwnd, wparam.0 as u32)
+                || input::global_key(hwnd, wparam.0 as u32)
                 || panes::key(hwnd, wparam.0 as u32)
                 || grid::key(hwnd, wparam.0 as u32)
                 || tabs_input::key(hwnd, wparam.0 as u32)
@@ -1155,6 +1159,7 @@ fn paint_window(hwnd: HWND) -> Result<()> {
                 0.0
             })
         .max(0.0);
+        window.navigation.top = window.navigation.top.min(window.navigation.maximum());
         window.list.navigation_width = window.navigation.left();
         window.panes.focus = if window.chrome.cues && window.title.active {
             match window.chrome.focus {
@@ -1702,6 +1707,7 @@ fn invalidate_header(hwnd: HWND) {
 
 enum Navigation {
     Open(String),
+    Relocate(String),
     History(usize),
     Back,
     Forward,
@@ -1723,12 +1729,36 @@ fn navigate(hwnd: HWND, navigation: Navigation) -> Result<()> {
     let result = (|| {
         let location = &mut window.tabs.active_mut().location;
         let previous_path = location.tab.path().to_owned();
+        let relocating = matches!(&navigation, Navigation::Relocate(_));
         let current = location.tab.index;
         let cues = window.list.interaction.cues;
         window.reveal_path = None;
         location.visits[current] = window.list.interaction.selection.clone();
         let target = match navigation {
             Navigation::Open(path) => Some(path),
+            Navigation::Relocate(path) => {
+                let old = std::mem::replace(&mut location.tab.history[current], path.clone());
+                let remap = |entry: &String| {
+                    if entry
+                        .get(..old.len())
+                        .is_some_and(|prefix| crate::app::ids::same(prefix, &old))
+                    {
+                        let suffix = &entry[old.len()..];
+                        if suffix.is_empty() || suffix.starts_with(['\\', '/']) {
+                            return format!("{path}{suffix}");
+                        }
+                    }
+                    entry.clone()
+                };
+                let visit = &mut location.visits[current];
+                visit.selected = visit.selected.iter().map(remap).collect();
+                visit.anchor = visit.anchor.as_ref().map(remap);
+                visit.focused = visit.focused.as_ref().map(remap);
+                if let Some(view) = location.views.remove(&old) {
+                    location.views.insert(path, view);
+                }
+                None
+            }
             Navigation::Up => {
                 let parent = crate::app::ids::parent_of(location.tab.path());
                 let path = location
@@ -1778,14 +1808,26 @@ fn navigate(hwnd: HWND, navigation: Navigation) -> Result<()> {
         window.reveal_path = visit.focused.clone();
         if window.list.dirty {
             if let Some(folder) = &window.list.folder {
-                location
-                    .views
-                    .insert(previous_path.clone(), folder.view.clone());
+                location.views.insert(
+                    if relocating {
+                        location.tab.path().to_owned()
+                    } else {
+                        previous_path.clone()
+                    },
+                    folder.view.clone(),
+                );
             }
         }
-        window.list.save(&previous_path).map_err(|error| {
-            windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error)
-        })?;
+        window
+            .list
+            .save(if relocating {
+                location.tab.path()
+            } else {
+                &previous_path
+            })
+            .map_err(|error| {
+                windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error)
+            })?;
         let list = list::List::search_start(
             &window.worker,
             hwnd,

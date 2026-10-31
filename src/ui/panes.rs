@@ -985,5 +985,14 @@ pub fn key(hwnd: HWND, key: u32) -> bool {
     if super::input::update_settings() {
         super::invalidate_all(hwnd);
     }
+    super::chrome::set_focus(
+        hwnd,
+        super::chrome::Focus::Command(super::chrome::Command::Pane),
+    );
+    super::WINDOW.with(|slot| {
+        if let Some(window) = slot.borrow_mut().as_mut() {
+            window.chrome.cues = false;
+        }
+    });
     true
 }

@@ -256,6 +256,7 @@ impl State {
 pub enum LabelLayout {
     Line,
     Paragraph,
+    Tree,
 }
 
 pub enum Presentation {
@@ -274,6 +275,11 @@ unsafe fn create(parent: HWND, id: usize, font: HFONT, presentation: Presentatio
         ),
         Presentation::Label { bounds, layout } => (
             WS_CHILD
+                | if matches!(layout, LabelLayout::Tree) {
+                    WS_BORDER
+                } else {
+                    WINDOW_STYLE(0)
+                }
                 | WINDOW_STYLE(if matches!(layout, LabelLayout::Paragraph) {
                     ES_MULTILINE | ES_CENTER | ES_AUTOVSCROLL
                 } else {
@@ -340,6 +346,10 @@ impl Label {
             lfQuality: CLEARTYPE_QUALITY,
             ..Default::default()
         };
+        if matches!(layout, LabelLayout::Tree) {
+            descriptor.lfCharSet = DEFAULT_CHARSET;
+            descriptor.lfQuality = DEFAULT_QUALITY;
+        }
         let family = crate::shell::wide("Segoe UI");
         descriptor.lfFaceName[..family.len()].copy_from_slice(&family);
         unsafe {
@@ -374,19 +384,29 @@ impl Label {
     }
 }
 
-pub fn raster_label(hwnd: HWND, width: i32, height: i32) -> Result<crate::shell::icons::Rgba> {
+pub fn raster_label(
+    hwnd: HWND,
+    width: i32,
+    height: i32,
+    tree: bool,
+) -> Result<crate::shell::icons::Rgba> {
     let dib = super::dib::Dib::new(width, height)?;
     unsafe {
         let pixels = std::slice::from_raw_parts_mut(dib.pixels, (width * height * 4) as usize);
-        pixels.fill(if crate::shell::theme::dark() { 33 } else { 255 });
+        pixels.fill(if !tree && crate::shell::theme::dark() {
+            33
+        } else {
+            255
+        });
         let saved = SaveDC(dib.dc);
         if saved == 0 {
             return Err(windows::core::Error::from_win32());
         }
-        if IntersectClipRect(dib.dc, 1, 2, width - 1, height - 2).0 == 0 {
+        let inset = if tree { (0, 0) } else { (1, 2) };
+        if IntersectClipRect(dib.dc, inset.0, inset.1, width - inset.0, height - inset.1).0 == 0 {
             return Err(windows::core::Error::from_win32());
         }
-        SetViewportOrgEx(dib.dc, 1, 2, None).ok()?;
+        SetViewportOrgEx(dib.dc, inset.0, inset.1, None).ok()?;
         SendMessageW(
             hwnd,
             WM_PRINTCLIENT,
@@ -394,11 +414,15 @@ pub fn raster_label(hwnd: HWND, width: i32, height: i32) -> Result<crate::shell:
             Some(LPARAM(PRF_CLIENT as isize | PRF_ERASEBKGND as isize)),
         );
         RestoreDC(dib.dc, saved).ok()?;
-        let border = windows::Win32::Foundation::COLORREF(if crate::shell::theme::dark() {
-            0xffffff
+        let border = if tree {
+            windows::Win32::Foundation::COLORREF(GetSysColor(COLOR_WINDOWFRAME))
         } else {
-            0
-        });
+            windows::Win32::Foundation::COLORREF(if crate::shell::theme::dark() {
+                0xffffff
+            } else {
+                0
+            })
+        };
         SetDCBrushColor(dib.dc, border);
         if FrameRect(
             dib.dc,
@@ -755,6 +779,57 @@ pub fn composing(hwnd: HWND) -> bool {
     }
 }
 
+fn text_word_stop(text: &str, from: u32, to: u32) -> u32 {
+    let mut target = to;
+    let mut containing = None;
+    let mut record = |start: u32, end: u32| {
+        if to > from {
+            if start <= from && from < end {
+                containing = Some(end);
+            } else if start > from {
+                target = target.min(start);
+            }
+        } else if to < from {
+            if start < from && from <= end {
+                containing = Some(start);
+            } else if end < from {
+                target = target.max(end);
+            }
+        }
+    };
+    let mut characters = text.chars().peekable();
+    let mut previous = None::<char>;
+    let mut offset = 0;
+    let mut run = None::<(u32, u32, bool)>;
+    while let Some(character) = characters.next() {
+        let start = offset;
+        offset += character.len_utf16() as u32;
+        let decimal = matches!(character, '.' | ',')
+            && previous.is_some_and(|value| value.is_ascii_digit())
+            && characters
+                .peek()
+                .is_some_and(|value| value.is_ascii_digit());
+        if character.is_ascii_punctuation() && character != '\'' && !decimal {
+            if run.is_some_and(|(_, _, whitespace)| whitespace) {
+                let (start, end, _) = run.take().unwrap();
+                record(start, end);
+            }
+            run.get_or_insert((start, offset, false)).1 = offset;
+        } else if character.is_whitespace() && run.is_some() {
+            let run = run.as_mut().unwrap();
+            run.1 = offset;
+            run.2 = true;
+        } else if let Some((start, end, _)) = run.take() {
+            record(start, end);
+        }
+        previous = Some(character);
+    }
+    if let Some((start, end, _)) = run {
+        record(start, end);
+    }
+    containing.unwrap_or(target)
+}
+
 unsafe extern "system" fn procedure(
     hwnd: HWND,
     message: u32,
@@ -765,6 +840,9 @@ unsafe extern "system" fn procedure(
 ) -> LRESULT {
     let parent = HWND(parent as _);
     let _context = super::context::enter(parent);
+    if super::chrome::alt_message(parent, message, wparam.0) {
+        return LRESULT(0);
+    }
     if let Some(result) = super::rename::edit_message(hwnd, message, wparam, lparam) {
         return result;
     }
@@ -797,7 +875,9 @@ unsafe extern "system" fn procedure(
             && windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) >= 0
             && !composing(hwnd)
         {
-            history(parent, hwnd, wparam.0 as u32);
+            if !label || wparam.0 != 0x59 {
+                history(parent, hwnd, wparam.0 as u32);
+            }
             return LRESULT(0);
         }
         if !label && super::address_input::edit_key(parent, hwnd, wparam.0 as u32) {
@@ -809,6 +889,38 @@ unsafe extern "system" fn procedure(
         {
             SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
             changed(parent, hwnd, snapshot(hwnd));
+            return LRESULT(0);
+        }
+        if !label
+            && matches!(wparam.0, 0x25 | 0x27)
+            && super::input::modifiers().ctrl
+            && windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) >= 0
+            && !composing(hwnd)
+        {
+            let before = snapshot(hwnd);
+            DefSubclassProc(hwnd, message, wparam, lparam);
+            let after = snapshot(hwnd);
+            let position = text_word_stop(&before.text, before.active, after.active);
+            if position != after.active {
+                let anchor = if super::input::modifiers().shift {
+                    if before.active == before.start {
+                        before.end
+                    } else {
+                        before.start
+                    }
+                } else {
+                    position
+                };
+                SendMessageW(
+                    hwnd,
+                    EM_SETSEL,
+                    Some(WPARAM(anchor as usize)),
+                    Some(LPARAM(position as isize)),
+                );
+            }
+            let mut state = snapshot(hwnd);
+            state.kind = Kind::Movement;
+            changed(parent, hwnd, state);
             return LRESULT(0);
         }
         if matches!(wparam.0, 0x08 | 0x2e)
@@ -838,6 +950,9 @@ unsafe extern "system" fn procedure(
                         }
                         offset += character.len_utf16() as u32;
                     }
+                }
+                if !label {
+                    boundary = text_word_stop(&before.text, before.start, boundary);
                 }
                 SendMessageW(
                     hwnd,
@@ -905,6 +1020,25 @@ unsafe extern "system" fn procedure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measured_textbox_boundaries_preserve_utf16_positions() {
+        let text = "NAVI_SHORTCUT_TEST_alpha beta gamma";
+        assert_eq!(text_word_stop(text, 0, 25), 4);
+        assert_eq!(text_word_stop(text, 4, 25), 5);
+        assert_eq!(text_word_stop(text, 5, 25), 13);
+        assert_eq!(text_word_stop(text, 19, 0), 18);
+        assert_eq!(text_word_stop(text, 35, 30), 30);
+        assert_eq!(text_word_stop("🙂_ação", 0, 7), 2);
+        assert_eq!(text_word_stop("🙂_ação", 3, 0), 2);
+        assert_eq!(text_word_stop("C:\\alpha_beta", 0, 2), 1);
+        assert_eq!(text_word_stop("C:\\alpha_beta", 1, 2), 3);
+        assert_eq!(text_word_stop("C:\\alpha_beta", 3, 2), 1);
+        assert_eq!(text_word_stop("alpha-beta.txt", 0, 6), 5);
+        assert_eq!(text_word_stop("alpha__beta", 5, 6), 7);
+        assert_eq!(text_word_stop("can't stop", 0, 6), 6);
+        assert_eq!(text_word_stop("alpha- beta", 5, 6), 7);
+    }
 
     fn update(state: &mut State, text: &str, kind: Kind) {
         let end = text.encode_utf16().count() as u32;

@@ -423,18 +423,18 @@ pub fn cursor() -> bool {
     true
 }
 
+pub fn reveal_current(hwnd: HWND) {
+    WINDOW.with(|slot| {
+        if let Some(window) = slot.borrow_mut().as_mut() {
+            window.navigation.manual_follow = true;
+            window.navigation.follow_pending = true;
+        }
+    });
+    invalidate(hwnd);
+}
+
 pub fn key(hwnd: HWND, key: u32) -> bool {
     let mods = super::input::modifiers();
-    if key == 0x45 && mods.ctrl && mods.shift {
-        WINDOW.with(|slot| {
-            if let Some(window) = slot.borrow_mut().as_mut() {
-                window.navigation.manual_follow = true;
-                window.navigation.follow_pending = true;
-            }
-        });
-        invalidate(hwnd);
-        return true;
-    }
     let focused = WINDOW.with(|slot| {
         slot.borrow()
             .as_ref()
@@ -445,6 +445,50 @@ pub fn key(hwnd: HWND, key: u32) -> bool {
         || unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) < 0 }
     {
         return false;
+    }
+    if key == 0x71 && !mods.ctrl && !mods.shift {
+        if let Err(error) = super::rename::tree(hwnd) {
+            super::fail(error);
+        }
+        return true;
+    }
+    if mods.ctrl && matches!(key, 0x43 | 0x58 | 0x2d) {
+        let target = WINDOW.with(|slot| {
+            let slot = slot.borrow();
+            let window = slot.as_ref()?;
+            let row = window
+                .navigation
+                .tree
+                .rows
+                .get(window.navigation.selected?)?;
+            let node = window.navigation.tree.node(&row.reference)?;
+            node.node.is_fs.then(|| node.node.id.clone())
+        });
+        if let Some(path) = target {
+            if let Some(context) = super::menu_actions::context(hwnd) {
+                if key == 0x43 && mods.shift {
+                    super::menu_actions::run(
+                        hwnd,
+                        context,
+                        crate::app::menu_model::Action::CopyPath(vec![path]),
+                    );
+                } else if !mods.shift {
+                    if let Err(error) = super::menu_actions::file(
+                        hwnd,
+                        &context.path,
+                        &[path],
+                        if key == 0x58 {
+                            crate::app::commands::FileAction::Cut
+                        } else {
+                            crate::app::commands::FileAction::Copy
+                        },
+                    ) {
+                        super::fail(error);
+                    }
+                }
+            }
+        }
+        return true;
     }
     if key == 0x5d || key == 0x79 && mods.shift {
         let target = WINDOW.with(|slot| {

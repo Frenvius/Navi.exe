@@ -399,6 +399,56 @@ impl State {
         worker.send(Request::Roots(self.root_generation));
     }
 
+    pub fn renamed(&mut self, moves: &[(String, String)], worker: &Worker) -> bool {
+        fn remap(path: &str, from: &str, to: &str) -> Option<String> {
+            if crate::app::ids::same(path, from) {
+                Some(to.into())
+            } else {
+                let prefix = path.get(..from.len())?;
+                let suffix = path.get(from.len()..)?;
+                (crate::app::ids::same(prefix, from) && suffix.starts_with(['\\', '/']))
+                    .then(|| format!("{to}{suffix}"))
+            }
+        }
+        fn visit(nodes: &mut [crate::app::navtree::TreeNode], from: &str, to: &str) -> bool {
+            let mut changed = false;
+            for node in nodes {
+                if let Some(next) = remap(&node.node.id, from, to) {
+                    if crate::app::ids::same(&node.node.id, from) {
+                        if let Some(name) = std::path::Path::new(to).file_name() {
+                            node.node.name = name.to_string_lossy().into_owned();
+                        }
+                    }
+                    node.node.id = next;
+                    changed = true;
+                }
+                if let Some(children) = node.children.as_mut() {
+                    changed |= visit(children, from, to);
+                }
+            }
+            changed
+        }
+        let mut changed = false;
+        for (from, to) in moves {
+            for section in &mut self.tree.sections {
+                changed |= visit(section, from, to);
+            }
+            if let Some(pick) = self.pick.as_mut() {
+                if let Some(next) = remap(&pick.id, from, to) {
+                    pick.id = next;
+                }
+                if let Some(next) = remap(&pick.at, from, to) {
+                    pick.at = next;
+                }
+            }
+        }
+        if changed {
+            self.reload(worker);
+            self.changed();
+        }
+        changed
+    }
+
     pub fn reload(&mut self, worker: &Worker) {
         self.refresh(worker);
         for row in &self.tree.rows {

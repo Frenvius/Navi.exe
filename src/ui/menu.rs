@@ -1254,7 +1254,7 @@ pub fn owner_message(owner: HWND, message: u32, wparam: WPARAM) -> Option<LRESUL
                 0x30..=0x5a if modifiers.ctrl => char::from_u32(key).map(|value| value.to_string()),
                 _ => None,
             };
-            if let Some(name) = name {
+            if let Some(name) = name.filter(|_| !popup.layout.context) {
                 let chord = format!(
                     "{}{}{}{}",
                     if modifiers.ctrl { "Ctrl+" } else { "" },

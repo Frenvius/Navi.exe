@@ -793,6 +793,21 @@ pub(super) fn draw_plate(
     {
         draw_sliced(canvas, &assets.plates[index], rect, 1.0);
     }
+    if folder.grid.is_none() && state.cell > 0 && active && focus && state.cues {
+        if let Some(column) = folder.columns.get(state.cell) {
+            let left = folder.columns[..state.cell]
+                .iter()
+                .map(|column| column.width)
+                .sum::<f32>();
+            let right = left + column.width;
+            for edge in [
+                super::address::rect(left, rect.top, 1.0, rect.bottom - rect.top),
+                super::address::rect(right - 1.0, rect.top, 1.0, rect.bottom - rect.top),
+            ] {
+                fill(canvas, edge, &theme.list_focus);
+            }
+        }
+    }
     Ok(())
 }
 

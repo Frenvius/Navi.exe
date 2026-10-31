@@ -294,6 +294,43 @@ pub fn background(hwnd: HWND, point: (f32, f32), origin: Origin) {
 
 pub fn key(hwnd: HWND, key: u32) -> bool {
     let modifiers = super::input::modifiers();
+    if key == 0x0d
+        && !modifiers.ctrl
+        && !modifiers.shift
+        && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) < 0 }
+        && WINDOW.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|window| window.chrome.focus == super::chrome::Focus::List)
+        })
+    {
+        if let Some(context) = context(hwnd) {
+            let paths = context
+                .selected
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+            run(hwnd, context, Action::Properties(paths));
+        }
+        return true;
+    }
+    if modifiers.ctrl
+        && modifiers.shift
+        && key == 0x43
+        && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) >= 0 }
+    {
+        if let Some(context) = context(hwnd) {
+            if context.selected.iter().all(|entry| entry.is_fs) {
+                let paths = context
+                    .selected
+                    .iter()
+                    .map(|entry| entry.path.clone())
+                    .collect();
+                run(hwnd, context, Action::CopyPath(paths));
+            }
+        }
+        return true;
+    }
     if modifiers.ctrl && modifiers.shift && key == 0x4e {
         if let Some(context) = context(hwnd) {
             run(hwnd, context, Action::NewFolder);
@@ -913,6 +950,16 @@ fn history(hwnd: HWND, direction: History) -> Result<()> {
     let Some(operation) = operation else {
         return Ok(());
     };
+    let moves = match &operation {
+        crate::app::undo::Undo::Rename(pairs) => pairs
+            .iter()
+            .map(|(from, to)| match direction {
+                History::Undo => (to.clone(), from.clone()),
+                History::Redo => (from.clone(), to.clone()),
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
     let applied = match direction {
         History::Undo => crate::app::undo::undo_operation(hwnd, operation),
         History::Redo => crate::app::undo::redo_operation(hwnd, operation),
@@ -942,6 +989,7 @@ fn history(hwnd: HWND, direction: History) -> Result<()> {
         })
         .map_err(error)?;
     publish_history(hwnd);
+    super::rename::relocate(hwnd, &moves)?;
     super::invalidate_all(hwnd);
     Ok(())
 }

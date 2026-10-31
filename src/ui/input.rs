@@ -18,6 +18,29 @@ pub fn modifiers() -> Modifiers {
     }
 }
 
+pub fn global_key(hwnd: HWND, key: u32) -> bool {
+    let mods = modifiers();
+    let alt = unsafe { GetKeyState(VK_MENU.0 as i32) < 0 };
+    if !alt && (key == 0x74 && !mods.ctrl || key == 0x52 && mods.ctrl && !mods.shift) {
+        super::address_input::activate(hwnd, super::address::Target::Refresh);
+        return true;
+    }
+    if !alt && mods.ctrl && mods.shift && key == 0x45 {
+        super::navigation_input::reveal_current(hwnd);
+        return true;
+    }
+    if !alt && mods.ctrl && !mods.shift && matches!(key, 0x4c | 0x45 | 0x46)
+        || alt && !mods.ctrl && !mods.shift && key == 0x44
+        || !alt && !mods.ctrl && !mods.shift && matches!(key, 0x72 | 0x73)
+    {
+        return super::address_input::key(hwnd, key);
+    }
+    if key == 0x79 && !alt && !mods.ctrl && !mods.shift {
+        return super::chrome::key(hwnd, key);
+    }
+    false
+}
+
 pub(super) fn stop(hwnd: HWND, timer: usize) {
     let armed = WINDOW.with(|slot| {
         slot.borrow_mut()

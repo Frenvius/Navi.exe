@@ -128,6 +128,8 @@ pub struct State {
     pub cues: bool,
     active: bool,
     alt_entry: bool,
+    alt_pending: bool,
+    alt_dismissed: bool,
     pub hover: Option<Target>,
     pub pressed: Option<Target>,
     pub can_paste: bool,
@@ -1420,6 +1422,50 @@ pub(super) fn publish_focus(hwnd: windows::Win32::Foundation::HWND, focus: Focus
     }
 }
 
+pub fn alt_message(hwnd: windows::Win32::Foundation::HWND, message: u32, value: usize) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    if !matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) {
+        if message == WM_ACTIVATE && value & 0xffff == WA_INACTIVE as usize {
+            super::WINDOW.with(|slot| {
+                if let Some(window) = slot.borrow_mut().as_mut() {
+                    window.chrome.alt_pending = false;
+                    window.chrome.alt_dismissed = false;
+                }
+            });
+        }
+        return false;
+    }
+    if matches!(message, WM_KEYUP | WM_SYSKEYUP) {
+        if value != 0x12 {
+            return false;
+        }
+        let pending = super::WINDOW.with(|slot| {
+            slot.borrow_mut().as_mut().is_some_and(|window| {
+                window.chrome.alt_dismissed = false;
+                std::mem::take(&mut window.chrome.alt_pending)
+            })
+        });
+        if pending {
+            key(hwnd, 0x12);
+        }
+        return true;
+    }
+    let mods = super::input::modifiers();
+    let menu = super::menu::is_open(hwnd);
+    super::WINDOW.with(|slot| {
+        slot.borrow_mut().as_mut().is_some_and(|window| {
+            if value == 0x12 {
+                window.chrome.alt_pending = !menu && !mods.ctrl && !mods.shift;
+                window.chrome.alt_dismissed = menu;
+                return !menu && !mods.ctrl && !mods.shift;
+            }
+            window.chrome.alt_pending = false;
+            window.chrome.alt_dismissed
+                && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(0x12) < 0 }
+        })
+    })
+}
+
 pub fn key_up(hwnd: windows::Win32::Foundation::HWND, key: u32) -> bool {
     let pressed = super::WINDOW.with(|slot| slot.borrow_mut().as_mut().and_then(|window| {
         if window.chrome.keyboard_press != Some(key) {return None;}
@@ -1479,9 +1525,11 @@ pub fn key(hwnd: windows::Win32::Foundation::HWND, key: u32) -> bool {
         return false;
     }
     let shortcut = match key {
-        0x58 if mods.ctrl => Some(Command::Cut),
-        0x43 if mods.ctrl => Some(Command::Copy),
-        0x56 if mods.ctrl => Some(Command::Paste),
+        0x58 if mods.ctrl && !mods.shift => Some(Command::Cut),
+        0x43 | 0x2d if mods.ctrl && !mods.shift => Some(Command::Copy),
+        0x56 if mods.ctrl && !mods.shift => Some(Command::Paste),
+        0x2d if mods.shift && !mods.ctrl => Some(Command::Paste),
+        0x44 if mods.ctrl && !mods.shift => Some(Command::Delete),
         0x2e if !mods.ctrl => Some(Command::Delete),
         _ => None,
     };
@@ -1526,7 +1574,7 @@ pub fn key(hwnd: windows::Win32::Foundation::HWND, key: u32) -> bool {
     let Some((focus, status, commands, column_count)) = state else {
         return false;
     };
-    if key == 0x12 {
+    if key == 0x12 || key == 0x79 && !mods.shift {
         if let Some(command) = commands.first() {
             super::WINDOW.with(|slot| {
                 if let Some(window) = slot.borrow_mut().as_mut() {

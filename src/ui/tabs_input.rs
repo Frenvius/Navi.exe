@@ -26,7 +26,7 @@ pub fn key(hwnd: HWND, key: u32) -> bool {
             0x54 if !modifiers.shift => {
                 Some(super::tabs::open(hwnd, &crate::app::ids::start_location()))
             }
-            0x57 => {
+            0x57 | 0x73 if !modifiers.shift => {
                 let index = super::WINDOW
                     .with(|slot| slot.borrow().as_ref().map(|window| window.tabs.current));
                 index.map(|index| super::tabs::close(hwnd, index))
