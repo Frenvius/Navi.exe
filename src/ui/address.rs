@@ -40,17 +40,21 @@ pub struct Item {
 }
 
 pub enum Request {
+    ZoxideDetect(bool),
+    ZoxideInstallationChanged,
     DragPicture(u64, String),
     Infotip(u64, String),
     Navigation(super::navigation::Work),
     Path(String),
     Suggestions(u64, String),
     Children(u64, Target, String),
-    Submit(String, String, String),
+    Submit(u64, String, String, String),
+    Jump(u64, String, String),
     Stop,
 }
 
 pub enum Reply {
+    ZoxideInstallationChanged,
     DragPicture(
         u64,
         std::result::Result<(crate::shell::icons::Rgba, crate::shell::icons::Rgba), String>,
@@ -58,7 +62,8 @@ pub enum Reply {
     Infotip(u64, String),
     Suggestions(u64, Vec<String>, Vec<String>),
     Children(u64, Target, std::result::Result<Vec<Item>, String>),
-    Submitted(String, String, Option<crate::app::address::Submission>),
+    Submitted(u64, String, String, Option<crate::app::address::Submission>),
+    Jumped(u64, String, String, Option<String>),
     Cloud(crate::shell::cloud::Snapshot, Option<Arc<Vec<u8>>>),
 }
 
@@ -83,6 +88,11 @@ impl Worker {
                 let mut pending = None;
                 while let Some(request) = next_request(&requests, &mut pending) {
                     let reply = match request {
+                        Request::ZoxideDetect(enable) => {
+                            crate::app::zoxide_install::detect(enable);
+                            Reply::ZoxideInstallationChanged
+                        }
+                        Request::ZoxideInstallationChanged => Reply::ZoxideInstallationChanged,
                         Request::DragPicture(token, path) => Reply::DragPicture(
                             token,
                             crate::shell::icons::tab_drag_picture(&path, 80).map(|tab| {
@@ -105,6 +115,7 @@ impl Worker {
                             continue;
                         }
                         Request::Path(path) => {
+                            crate::app::zoxide::record(&path);
                             let mut source = match shared_cloud.lock() {
                                 Ok(source) => source,
                                 Err(error) => {
@@ -142,11 +153,15 @@ impl Worker {
                         }
 
                         Request::Stop => break,
-                        Request::Suggestions(generation, text) => Reply::Suggestions(
-                            generation,
-                            crate::shell::address::typed_paths(),
-                            crate::shell::address::suggestions(&text),
-                        ),
+                        Request::Suggestions(generation, text) => {
+                            let mut items = crate::shell::address::suggestions(&text);
+                            crate::app::zoxide::suggestions(&text, &mut items);
+                            Reply::Suggestions(
+                                generation,
+                                crate::shell::address::typed_paths(),
+                                items,
+                            )
+                        }
                         Request::Children(generation, target, path) => Reply::Children(
                             generation,
                             target,
@@ -157,9 +172,13 @@ impl Worker {
                                     .collect()
                             }),
                         ),
-                        Request::Submit(text, path, location) => {
+                        Request::Submit(generation, text, path, location) => {
                             let submission = crate::app::address::resolve(&text, &path, &location);
-                            Reply::Submitted(text, path, submission)
+                            Reply::Submitted(generation, text, path, submission)
+                        }
+                        Request::Jump(generation, text, path) => {
+                            let target = crate::app::zoxide::jump(&text);
+                            Reply::Jumped(generation, text, path, target)
                         }
                     };
                     if replies.send(reply).is_err() {
@@ -268,6 +287,7 @@ mod worker_tests {
         sender.send(Request::Infotip(2, "beta".into())).unwrap();
         sender
             .send(Request::Submit(
+                1,
                 "text".into(),
                 "path".into(),
                 "location".into(),
@@ -279,7 +299,7 @@ mod worker_tests {
             matches!(next_request(&receiver, &mut pending), Some(Request::Infotip(2, path)) if path == "beta")
         );
         assert!(
-            matches!(next_request(&receiver, &mut pending), Some(Request::Submit(text, path, location)) if text == "text" && path == "path" && location == "location")
+            matches!(next_request(&receiver, &mut pending), Some(Request::Submit(1, text, path, location)) if text == "text" && path == "path" && location == "location")
         );
         assert!(
             matches!(next_request(&receiver, &mut pending), Some(Request::Infotip(3, path)) if path == "gamma")
@@ -297,6 +317,7 @@ mod worker_tests {
             .unwrap();
         sender
             .send(Request::Submit(
+                1,
                 "C:\\Windows".into(),
                 "C:\\".into(),
                 "C:".into(),
@@ -374,6 +395,7 @@ impl State {
             true,
         ];
         if self.path != tab.path() {
+            self.generation += 1;
             self.cloud = None;
             self.cloud_image = None;
         }

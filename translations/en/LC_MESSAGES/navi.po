@@ -516,3 +516,54 @@ msgstr "Sort and group options."
 
 msgid "cmd.view.tip"
 msgstr "Layout and view options."
+
+msgid "settings.zoxide.title"
+msgstr "Zoxide"
+
+msgid "settings.zoxide.found"
+msgstr "zoxide found."
+
+msgid "settings.zoxide.missing"
+msgstr "zoxide was not found. Install it to enable these options."
+
+msgid "settings.zoxide.integration.title"
+msgstr "Address bar integration"
+
+msgid "settings.zoxide.integration.description"
+msgstr "Suggest frequent folders and jump to matching folders when you enter a few words."
+
+msgid "settings.zoxide.record.title"
+msgstr "Record folder visits"
+
+msgid "settings.zoxide.record.description"
+msgstr "Add filesystem folders visited in Navi to the zoxide database, independently of address bar integration."
+
+msgid "settings.zoxide.error"
+msgstr "Could not save zoxide settings: {}"
+
+msgid "settings.zoxide.install"
+msgstr "Install"
+
+msgid "settings.zoxide.install.help"
+msgstr "How to install zoxide"
+
+msgid "settings.zoxide.installing"
+msgstr "Installing zoxide…"
+
+msgid "settings.zoxide.installed"
+msgstr "zoxide is installed and ready to use."
+
+msgid "settings.zoxide.install.failed"
+msgstr "Installation failed: {}"
+
+msgid "settings.zoxide.install.launch-error"
+msgstr "Could not start the installer or open the installation page: {}"
+
+msgid "settings.zoxide.install.exit-error"
+msgstr "WinGet returned {}. {}"
+
+msgid "settings.zoxide.install.timeout"
+msgstr "Installation exceeded the 5 minute time limit."
+
+msgid "settings.zoxide.install.not-found"
+msgstr "WinGet finished, but zoxide.exe could not be located."

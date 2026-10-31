@@ -494,3 +494,54 @@ msgstr "Opções de classificação e grupo."
 
 msgid "cmd.view.tip"
 msgstr "Opções de layout e exibição."
+
+msgid "settings.zoxide.title"
+msgstr "Zoxide"
+
+msgid "settings.zoxide.found"
+msgstr "zoxide encontrado."
+
+msgid "settings.zoxide.missing"
+msgstr "zoxide não encontrado. Instale-o para ativar estas opções."
+
+msgid "settings.zoxide.integration.title"
+msgstr "Integração com a barra de endereços"
+
+msgid "settings.zoxide.integration.description"
+msgstr "Sugira pastas frequentes e salte para pastas correspondentes ao digitar algumas palavras."
+
+msgid "settings.zoxide.record.title"
+msgstr "Registrar visitas a pastas"
+
+msgid "settings.zoxide.record.description"
+msgstr "Adicione pastas do sistema de arquivos visitadas no Navi ao banco do zoxide, independentemente da integração com a barra de endereços."
+
+msgid "settings.zoxide.error"
+msgstr "Não foi possível salvar as configurações do zoxide: {}"
+
+msgid "settings.zoxide.install"
+msgstr "Instalar"
+
+msgid "settings.zoxide.install.help"
+msgstr "Como instalar o zoxide"
+
+msgid "settings.zoxide.installing"
+msgstr "Instalando o zoxide…"
+
+msgid "settings.zoxide.installed"
+msgstr "zoxide instalado e disponível para uso."
+
+msgid "settings.zoxide.install.failed"
+msgstr "Falha na instalação: {}"
+
+msgid "settings.zoxide.install.launch-error"
+msgstr "Não foi possível iniciar o instalador ou abrir a página de instalação: {}"
+
+msgid "settings.zoxide.install.exit-error"
+msgstr "O WinGet retornou {}. {}"
+
+msgid "settings.zoxide.install.timeout"
+msgstr "A instalação excedeu o limite de 5 minutos."
+
+msgid "settings.zoxide.install.not-found"
+msgstr "O WinGet concluiu, mas zoxide.exe não foi localizado."

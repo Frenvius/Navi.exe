@@ -696,7 +696,9 @@ pub fn edit_key(hwnd: HWND, control: HWND, key: u32) -> bool {
 fn submit(hwnd: HWND) {
     WINDOW.with(|slot| {
         if let Some(window) = slot.borrow_mut().as_mut() {
+            window.address.generation += 1;
             window.address_worker.send(Request::Submit(
+                window.address.generation,
                 window.address.address_edit.text.clone(),
                 window.address.path.clone(),
                 window.address.location.clone(),
@@ -716,6 +718,7 @@ fn pick(hwnd: HWND, step: isize) {
             let next = (address.suggestion.map_or(-1, |i| i as isize) + step + 1)
                 .rem_euclid(address.suggestions.len() as isize + 1)
                 - 1;
+            address.generation += 1;
             address.suggestion = (next >= 0).then_some(next as usize);
             let text = address
                 .suggestion
@@ -875,6 +878,7 @@ pub fn ready(hwnd: HWND) {
     });
     for reply in replies {
         match reply {
+            Reply::ZoxideInstallationChanged => super::settings::refresh(hwnd),
             Reply::DragPicture(token, picture) => super::drop::picture(hwnd, token, picture),
             Reply::Infotip(token, text) => super::tooltip::ready(hwnd, token, text),
             Reply::Cloud(snapshot, image) => {
@@ -934,19 +938,64 @@ pub fn ready(hwnd: HWND) {
                     Err(error) => eprintln!("address children: {error}"),
                 }
             }
-            Reply::Submitted(text, path, submission) => {
+            Reply::Submitted(generation, text, path, submission) => {
+                if !submission_current(generation, &path) {
+                    continue;
+                }
                 if let Some(submission) = submission {
-                    if let Some(target) =
-                        crate::app::address::execute(hwnd, submission, &path, &text)
-                    {
-                        if let Err(error) = super::navigate(hwnd, super::Navigation::Open(target)) {
-                            super::fail(error);
+                    match crate::app::address::execute(hwnd, submission, &path) {
+                        Ok(Some(target)) => {
+                            if let Err(error) =
+                                super::navigate(hwnd, super::Navigation::Open(target))
+                            {
+                                super::fail(error);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(()) => {
+                            if !crate::app::zoxide::eligible(&text)
+                                || !crate::app::zoxide::Preferences::read().enabled
+                            {
+                                crate::app::address::show_error(hwnd, &text);
+                                continue;
+                            }
+                            WINDOW.with(|slot| {
+                                if let Some(window) = slot.borrow().as_ref() {
+                                    window
+                                        .address_worker
+                                        .send(Request::Jump(generation, text, path));
+                                }
+                            });
                         }
                     }
                 }
             }
+            Reply::Jumped(generation, text, path, target) => {
+                if !submission_current(generation, &path) {
+                    continue;
+                }
+                if let Some(target) =
+                    target.filter(|_| crate::app::zoxide::Preferences::read().enabled)
+                {
+                    crate::shell::address::push_typed_path(&target);
+                    if let Err(error) = super::navigate(hwnd, super::Navigation::Open(target)) {
+                        super::fail(error);
+                    }
+                } else {
+                    crate::app::address::show_error(hwnd, &text);
+                }
+            }
         }
     }
+}
+
+fn submission_current(generation: u64, path: &str) -> bool {
+    WINDOW.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|window| {
+            window.address.generation == generation
+                && window.tabs.active().location.tab.path() == path
+        })
+    })
 }
 
 fn cloud_menu(hwnd: HWND) -> Result<()> {

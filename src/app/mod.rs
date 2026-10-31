@@ -31,6 +31,8 @@ pub mod tab_transfer;
 pub(crate) mod tabs;
 pub(crate) mod undo;
 pub mod view;
+pub(crate) mod zoxide;
+pub(crate) mod zoxide_install;
 
 pub(crate) mod commands;
 use sort::Sort;

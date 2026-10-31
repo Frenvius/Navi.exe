@@ -1375,6 +1375,8 @@ pub(super) fn publish_focus(hwnd: windows::Win32::Foundation::HWND, focus: Focus
         Focus::Settings(super::settings::Target::Section) => 19,
         Focus::Settings(super::settings::Target::Toggle) => 20,
         Focus::Settings(super::settings::Target::Restore) => 21,
+        Focus::Settings(super::settings::Target::ZoxideInstall) => 28,
+        Focus::Settings(super::settings::Target::Zoxide(setting)) => 26 + setting as usize,
         Focus::Settings(super::settings::Target::OpenIn(source, destination)) => {
             22 + source as usize * 2 + destination as usize
         }

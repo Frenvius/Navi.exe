@@ -7,6 +7,8 @@ use super::{
     WINDOW,
 };
 use crate::app::launch_preferences::{Destination, Preferences, Source};
+use crate::app::zoxide::{Preferences as ZoxidePreferences, Setting as ZoxideSetting};
+use crate::app::zoxide_install::{self, Failure as InstallFailure, State as InstallState};
 use windows::{
     core::Result,
     Win32::{Foundation::HWND, Graphics::Direct2D::Common::*},
@@ -18,6 +20,8 @@ pub enum Target {
     Toggle,
     Restore,
     OpenIn(Source, Destination),
+    Zoxide(ZoxideSetting),
+    ZoxideInstall,
 }
 
 const OPEN_CHOICES: [Target; 4] = [
@@ -25,6 +29,11 @@ const OPEN_CHOICES: [Target; 4] = [
     Target::OpenIn(Source::External, Destination::NewWindow),
     Target::OpenIn(Source::WinE, Destination::NewTab),
     Target::OpenIn(Source::WinE, Destination::NewWindow),
+];
+
+const ZOXIDE_CHOICES: [Target; 2] = [
+    Target::Zoxide(ZoxideSetting::Integration),
+    Target::Zoxide(ZoxideSetting::Record),
 ];
 
 #[derive(Default)]
@@ -37,6 +46,17 @@ pub struct State {
     opening: Preferences,
     opening_error: String,
     opening_error_height: f32,
+    zoxide: ZoxidePreferences,
+    zoxide_error: String,
+    zoxide_install: InstallState,
+    zoxide_winget: bool,
+    zoxide_recheck: bool,
+    zoxide_action: D2D_RECT_F,
+    zoxide_cards: [D2D_RECT_F; 2],
+    zoxide_title_heights: [f32; 2],
+    zoxide_description_heights: [f32; 2],
+    zoxide_top: f32,
+    zoxide_status_height: f32,
     opening_cards: [D2D_RECT_F; 2],
     opening_title_heights: [f32; 2],
     opening_description_heights: [f32; 2],
@@ -63,6 +83,48 @@ impl State {
             self.captured = false;
         }
     }
+    fn zoxide_status(&self) -> String {
+        if !self.zoxide_error.is_empty() {
+            return self.zoxide_error.clone();
+        }
+        match &self.zoxide_install {
+            InstallState::Installing => crate::i18n::tr("settings.zoxide.installing").into(),
+            InstallState::Installed => crate::i18n::tr("settings.zoxide.installed").into(),
+            InstallState::Failed(error) => {
+                let detail = match error {
+                    InstallFailure::Launch(message) => {
+                        crate::i18n::trf("settings.zoxide.install.launch-error", &[message])
+                    }
+                    InstallFailure::Exit(code, message) => crate::i18n::trf(
+                        "settings.zoxide.install.exit-error",
+                        &[&format!("0x{code:08X}"), message],
+                    ),
+                    InstallFailure::Timeout => {
+                        crate::i18n::tr("settings.zoxide.install.timeout").into()
+                    }
+                    InstallFailure::NotFound => {
+                        crate::i18n::tr("settings.zoxide.install.not-found").into()
+                    }
+                    InstallFailure::Settings(message) => {
+                        crate::i18n::trf("settings.zoxide.error", &[message])
+                    }
+                };
+                crate::i18n::trf("settings.zoxide.install.failed", &[&detail])
+            }
+            InstallState::Idle => crate::i18n::tr(if self.zoxide.available {
+                "settings.zoxide.found"
+            } else {
+                "settings.zoxide.missing"
+            })
+            .into(),
+        }
+    }
+    fn install_visible(&self) -> bool {
+        !self.zoxide.available || self.zoxide_install == InstallState::Installing
+    }
+    fn install_enabled(&self) -> bool {
+        self.install_visible() && self.zoxide_install != InstallState::Installing
+    }
     fn left(&self) -> f32 {
         if self.size.0 < 700.0 {
             156.0
@@ -82,6 +144,11 @@ impl State {
                     .max(1.0),
                 28.0,
             ),
+            Target::ZoxideInstall => self.zoxide_action,
+            Target::Zoxide(setting) => {
+                let card = self.zoxide_cards[setting as usize];
+                rect(card.right - 60.0, card.top + 24.0, 40.0, 20.0)
+            }
             Target::OpenIn(source, destination) => {
                 let card = self.opening_cards[source as usize];
                 let width = ((card.right - card.left - 48.0) / 2.0).max(1.0);
@@ -101,6 +168,8 @@ impl State {
         [Target::Section, Target::Toggle, Target::Restore]
             .into_iter()
             .chain(OPEN_CHOICES)
+            .chain(ZOXIDE_CHOICES.into_iter().filter(|_| self.zoxide.available))
+            .chain(self.install_enabled().then_some(Target::ZoxideInstall))
             .find(|&target| {
                 if target == Target::Restore && (!self.recovery || self.enabled) {
                     return false;
@@ -182,16 +251,73 @@ impl State {
             )?
             .height
         };
-        self.maximum = (top + self.opening_error_height + 20.0 - size.1).max(0.0);
+        top += self.opening_error_height + 20.0;
+        self.zoxide_top = top;
+        let status = self.zoxide_status();
+        self.zoxide_status_height = text
+            .layout(
+                &status,
+                label(12.0, 400).with_wrap(),
+                (width - 8.0).max(1.0),
+            )?
+            .height;
+        top += 44.0 + self.zoxide_status_height;
+        self.zoxide_action = rect(x, top, width.min(240.0), 32.0);
+        if self.install_visible() {
+            top += 44.0;
+        }
+        for (index, setting) in [ZoxideSetting::Integration, ZoxideSetting::Record]
+            .into_iter()
+            .enumerate()
+        {
+            let (title, description) = zoxide_labels(setting);
+            let tw = (width - 100.0).max(1.0);
+            self.zoxide_title_heights[index] = text
+                .layout(crate::i18n::tr(title), label(14.0, 400).with_wrap(), tw)?
+                .height;
+            self.zoxide_description_heights[index] = text
+                .layout(
+                    crate::i18n::tr(description),
+                    label(12.0, 400).with_wrap(),
+                    tw,
+                )?
+                .height;
+            let height =
+                (44.0 + self.zoxide_title_heights[index] + self.zoxide_description_heights[index])
+                    .max(88.0);
+            self.zoxide_cards[index] = rect(x, top, width, height);
+            top += height + 12.0;
+        }
+        self.maximum = (top + 20.0 - size.1).max(0.0);
         self.offset = self.offset.clamp(0.0, self.maximum);
         self.card = rect(x, 84.0 - self.offset, width, height);
-        for card in &mut self.opening_cards {
+        self.zoxide_top -= self.offset;
+        self.zoxide_action.top -= self.offset;
+        self.zoxide_action.bottom -= self.offset;
+        for card in self
+            .opening_cards
+            .iter_mut()
+            .chain(self.zoxide_cards.iter_mut())
+        {
             card.top -= self.offset;
             card.bottom -= self.offset;
         }
         Ok(())
     }
 }
+fn zoxide_labels(setting: ZoxideSetting) -> (&'static str, &'static str) {
+    match setting {
+        ZoxideSetting::Integration => (
+            "settings.zoxide.integration.title",
+            "settings.zoxide.integration.description",
+        ),
+        ZoxideSetting::Record => (
+            "settings.zoxide.record.title",
+            "settings.zoxide.record.description",
+        ),
+    }
+}
+
 fn opening_labels(source: Source) -> (&'static str, &'static str) {
     match source {
         Source::External => (
@@ -318,43 +444,13 @@ pub fn draw(
         ),
         &theme.text_secondary,
     )?;
-    let t = state.bounds(Target::Toggle);
-    rounded(
+    draw_toggle(
         canvas,
-        t,
-        10.0,
-        if state.enabled {
-            &theme.accent
-        } else {
-            &theme.text_secondary
-        },
-    );
-    if !state.enabled {
-        rounded(
-            canvas,
-            rect(t.left + 1.0, t.top + 1.0, 38.0, 18.0),
-            9.0,
-            if state.hover == Some(Target::Toggle) {
-                &theme.subtle_hover
-            } else {
-                &theme.settings_card
-            },
-        );
-    }
-    rounded(
-        canvas,
-        rect(
-            t.left + if state.enabled { 24.0 } else { 4.0 },
-            t.top + 4.0,
-            12.0,
-            12.0,
-        ),
-        6.0,
-        if state.enabled {
-            &theme.settings_toggle_on
-        } else {
-            &theme.text_secondary
-        },
+        state.bounds(Target::Toggle),
+        state.enabled,
+        true,
+        state.hover == Some(Target::Toggle),
+        theme,
     );
     if !state.error.is_empty() {
         paragraph(
@@ -540,6 +636,144 @@ pub fn draw(
             &theme.settings_error,
         )?;
     }
+    let x = state.left() + 28.0;
+    let width = (state.size.0 - x - 28.0).max(1.0);
+    paragraph(
+        canvas,
+        text,
+        crate::i18n::tr("settings.zoxide.title"),
+        label(20.0, 600),
+        rect(x, state.zoxide_top, width, 28.0),
+        &theme.text,
+    )?;
+    paragraph(
+        canvas,
+        text,
+        &state.zoxide_status(),
+        label(12.0, 400),
+        rect(
+            x,
+            state.zoxide_top + 32.0,
+            width,
+            state.zoxide_status_height,
+        ),
+        if state.zoxide_error.is_empty() && !matches!(state.zoxide_install, InstallState::Failed(_))
+        {
+            &theme.text_secondary
+        } else {
+            &theme.settings_error
+        },
+    )?;
+    if state.install_visible() {
+        let target = Target::ZoxideInstall;
+        let r = state.bounds(target);
+        let busy = state.zoxide_install == InstallState::Installing;
+        if state.zoxide_winget {
+            rounded(canvas, r, 4.0, &theme.control_border);
+            rounded(
+                canvas,
+                rect(
+                    r.left + 1.0,
+                    r.top + 1.0,
+                    r.right - r.left - 2.0,
+                    r.bottom - r.top - 2.0,
+                ),
+                3.0,
+                if !busy && state.pressed == Some(target) {
+                    &theme.control_pressed
+                } else if !busy && state.hover == Some(target) {
+                    &theme.control_hover
+                } else {
+                    &theme.control
+                },
+            );
+        }
+        super::details::draw_line(
+            canvas,
+            text,
+            crate::i18n::tr(if busy {
+                "settings.zoxide.installing"
+            } else if state.zoxide_winget {
+                "settings.zoxide.install"
+            } else {
+                "settings.zoxide.install.help"
+            }),
+            label(12.0, 400),
+            r,
+            if state.zoxide_winget { 12.0 } else { 0.0 },
+            if busy {
+                &theme.text_disabled
+            } else if state.zoxide_winget {
+                &theme.text
+            } else {
+                &theme.accent
+            },
+        )?;
+    }
+    for (index, setting) in [ZoxideSetting::Integration, ZoxideSetting::Record]
+        .into_iter()
+        .enumerate()
+    {
+        let card = state.zoxide_cards[index];
+        rounded(canvas, card, 4.0, &theme.card_border);
+        rounded(
+            canvas,
+            rect(
+                card.left + 1.0,
+                card.top + 1.0,
+                card.right - card.left - 2.0,
+                card.bottom - card.top - 2.0,
+            ),
+            3.0,
+            &theme.settings_card,
+        );
+        let (title, description) = zoxide_labels(setting);
+        let color = if state.zoxide.available {
+            &theme.text
+        } else {
+            &theme.text_disabled
+        };
+        paragraph(
+            canvas,
+            text,
+            crate::i18n::tr(title),
+            label(14.0, 400),
+            rect(
+                card.left + 20.0,
+                card.top + 16.0,
+                card.right - card.left - 100.0,
+                state.zoxide_title_heights[index],
+            ),
+            color,
+        )?;
+        paragraph(
+            canvas,
+            text,
+            crate::i18n::tr(description),
+            label(12.0, 400),
+            rect(
+                card.left + 20.0,
+                card.top + 22.0 + state.zoxide_title_heights[index],
+                card.right - card.left - 100.0,
+                state.zoxide_description_heights[index],
+            ),
+            &theme.text_secondary,
+        )?;
+        let target = Target::Zoxide(setting);
+        let enabled = if setting == ZoxideSetting::Integration {
+            state.zoxide.enabled
+        } else {
+            state.zoxide.record
+        };
+        draw_toggle(
+            canvas,
+            state.bounds(target),
+            enabled,
+            state.zoxide.available,
+            state.hover == Some(target),
+            theme,
+        );
+    }
     if cues {
         if let Focus::Settings(target) = focus {
             let r = state.bounds(target);
@@ -552,12 +786,67 @@ pub fn draw(
                     r.bottom - r.top + 4.0,
                 ),
                 theme,
-                if target == Target::Toggle { 12.0 } else { 4.0 },
+                if matches!(target, Target::Toggle | Target::Zoxide(_)) {
+                    12.0
+                } else {
+                    4.0
+                },
             );
         }
     }
     Ok(())
 }
+fn draw_toggle(
+    canvas: &Canvas,
+    t: D2D_RECT_F,
+    enabled: bool,
+    available: bool,
+    hover: bool,
+    theme: &Theme,
+) {
+    rounded(
+        canvas,
+        t,
+        10.0,
+        if enabled {
+            &theme.accent
+        } else if available {
+            &theme.text_secondary
+        } else {
+            &theme.text_disabled
+        },
+    );
+    if !enabled {
+        rounded(
+            canvas,
+            rect(t.left + 1.0, t.top + 1.0, 38.0, 18.0),
+            9.0,
+            if hover {
+                &theme.subtle_hover
+            } else {
+                &theme.settings_card
+            },
+        );
+    }
+    rounded(
+        canvas,
+        rect(
+            t.left + if enabled { 24.0 } else { 4.0 },
+            t.top + 4.0,
+            12.0,
+            12.0,
+        ),
+        6.0,
+        if enabled {
+            &theme.settings_toggle_on
+        } else if available {
+            &theme.text_secondary
+        } else {
+            &theme.text_disabled
+        },
+    );
+}
+
 pub fn active() -> bool {
     WINDOW.with(|slot| {
         slot.borrow().as_ref().is_some_and(|window| {
@@ -598,6 +887,10 @@ pub fn refresh(hwnd: HWND) {
     }
     let status = crate::app::default_manager::status();
     let opening = Preferences::read();
+    let zoxide = ZoxidePreferences::read();
+    let install = zoxide_install::state();
+    let winget = zoxide_install::winget_available();
+    let mut detect = None;
     let changed = WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(window) = slot.as_mut() else {
@@ -610,8 +903,18 @@ pub fn refresh(hwnd: HWND) {
             s.error.clone(),
             s.opening,
             s.opening_error.clone(),
+            s.zoxide,
+            s.zoxide_install.clone(),
+            s.zoxide_winget,
         );
+        if !s.loaded || s.zoxide_recheck {
+            detect = Some(s.zoxide_recheck);
+            s.zoxide_recheck = false;
+        }
         s.loaded = true;
+        s.zoxide = zoxide;
+        s.zoxide_install = install;
+        s.zoxide_winget = winget;
         match status {
             Ok(status) => {
                 s.enabled = status.enabled;
@@ -645,9 +948,34 @@ pub fn refresh(hwnd: HWND) {
                 s.error.clone(),
                 s.opening,
                 s.opening_error.clone(),
+                s.zoxide,
+                s.zoxide_install.clone(),
+                s.zoxide_winget,
             )
     });
+    if let Some(enable) = detect.filter(|_| !zoxide.available) {
+        WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow().as_ref() {
+                window
+                    .address_worker
+                    .send(super::address::Request::ZoxideDetect(enable));
+            }
+        });
+    }
     if changed {
+        let normalize = WINDOW.with(|slot| {
+            slot.borrow().as_ref().is_some_and(|window| {
+                window.chrome.focus == Focus::Settings(Target::ZoxideInstall)
+                    && window.settings.zoxide.available
+                    && !window.settings.install_visible()
+            })
+        });
+        if normalize {
+            super::chrome::set_focus(
+                hwnd,
+                Focus::Settings(Target::Zoxide(ZoxideSetting::Integration)),
+            );
+        }
         super::invalidate_all(hwnd);
     }
 }
@@ -662,6 +990,84 @@ pub fn after_paint(hwnd: HWND) {
 }
 fn activate(hwnd: HWND, target: Target) {
     if target == Target::Section {
+        return;
+    }
+    if target == Target::ZoxideInstall {
+        let action = WINDOW.with(|slot| {
+            slot.borrow().as_ref().and_then(|window| {
+                window
+                    .settings
+                    .install_enabled()
+                    .then_some(window.settings.zoxide_winget)
+            })
+        });
+        match action {
+            Some(true) => {
+                let mut senders = Vec::new();
+                for handle in super::context::handles() {
+                    let _context = super::context::enter(handle);
+                    WINDOW.with(|slot| {
+                        if let Some(window) = slot.borrow().as_ref() {
+                            senders.push(window.address_worker.dispatcher());
+                        }
+                    });
+                }
+                WINDOW.with(|slot| {
+                    if let Some(window) = slot.borrow_mut().as_mut() {
+                        window.settings.zoxide_error.clear();
+                    }
+                });
+                zoxide_install::start(move || {
+                    for sender in &senders {
+                        let _ = sender.send(super::address::Request::ZoxideInstallationChanged);
+                    }
+                });
+                refresh(hwnd);
+            }
+            Some(false) => {
+                if let Err(error) =
+                    crate::shell::ops::shell_execute(hwnd, zoxide_install::INSTALL_URL, None)
+                {
+                    WINDOW.with(|slot| {
+                        if let Some(window) = slot.borrow_mut().as_mut() {
+                            window.settings.zoxide_error =
+                                crate::i18n::trf("settings.zoxide.install.launch-error", &[&error]);
+                        }
+                    });
+                } else {
+                    WINDOW.with(|slot| {
+                        if let Some(window) = slot.borrow_mut().as_mut() {
+                            window.settings.zoxide_recheck = true;
+                        }
+                    });
+                }
+            }
+            None => {}
+        }
+        super::invalidate_all(hwnd);
+        return;
+    }
+    if let Target::Zoxide(setting) = target {
+        let preferences = ZoxidePreferences::read();
+        if !preferences.available {
+            return;
+        }
+        let enabled = if setting == ZoxideSetting::Integration {
+            preferences.enabled
+        } else {
+            preferences.record
+        };
+        let result = setting.save(!enabled);
+        refresh(hwnd);
+        WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow_mut().as_mut() {
+                window.settings.zoxide_error = match result {
+                    Ok(()) => String::new(),
+                    Err(error) => crate::i18n::trf("settings.zoxide.error", &[&error.to_string()]),
+                };
+            }
+        });
+        super::invalidate_all(hwnd);
         return;
     }
     if let Target::OpenIn(source, destination) = target {
@@ -803,6 +1209,16 @@ pub fn key(hwnd: HWND, key: u32) -> bool {
             ring.push(Focus::Settings(Target::Restore));
         }
         ring.extend(OPEN_CHOICES.map(Focus::Settings));
+        if ZoxidePreferences::read().available {
+            ring.extend(ZOXIDE_CHOICES.map(Focus::Settings));
+        }
+        if WINDOW.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|window| window.settings.install_enabled())
+        }) {
+            ring.push(Focus::Settings(Target::ZoxideInstall));
+        }
         let current = ring
             .iter()
             .position(|candidate| *candidate == focus)

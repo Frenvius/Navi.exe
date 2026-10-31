@@ -51,37 +51,38 @@ pub fn execute(
     hwnd: windows::Win32::Foundation::HWND,
     submission: Submission,
     path: &str,
-    text: &str,
-) -> Option<String> {
+) -> Result<Option<String>, ()> {
     use crate::shell::ops;
     match submission {
-        Submission::Navigate(target) => Some(target),
+        Submission::Navigate(target) => Ok(Some(target)),
         Submission::Open(target) => {
             if let Err(error) = ops::open(hwnd, &target) {
                 eprintln!("address open: {error}");
             }
-            None
+            Ok(None)
         }
         Submission::Execute(target) => {
-            if ops::shell_execute(hwnd, &target, Some(path)).is_err() {
-                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
-                let message = crate::shell::wide(&crate::i18n::system_format(
-                    "shell32.dll",
-                    12353,
-                    &[text.trim().trim_matches('"')],
-                ));
-                let title = crate::shell::wide(crate::i18n::tr("app.title"));
-                unsafe {
-                    MessageBoxW(
-                        Some(hwnd),
-                        windows::core::PCWSTR(message.as_ptr()),
-                        windows::core::PCWSTR(title.as_ptr()),
-                        MB_OK | MB_ICONERROR,
-                    );
-                }
-            }
-            None
+            ops::shell_execute(hwnd, &target, Some(path)).map_err(|_| ())?;
+            Ok(None)
         }
+    }
+}
+
+pub fn show_error(hwnd: windows::Win32::Foundation::HWND, text: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let message = crate::shell::wide(&crate::i18n::system_format(
+        "shell32.dll",
+        12353,
+        &[text.trim().trim_matches('"')],
+    ));
+    let title = crate::shell::wide(crate::i18n::tr("app.title"));
+    unsafe {
+        MessageBoxW(
+            Some(hwnd),
+            windows::core::PCWSTR(message.as_ptr()),
+            windows::core::PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
