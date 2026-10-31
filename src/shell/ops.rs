@@ -164,9 +164,15 @@ pub fn shell_execute(hwnd: HWND, text: &str, dir: Option<&str>) -> Result<(), St
     }
 }
 
-/// Opens an item the way a double click in Explorer does. When the item is a folder, or a
-/// shortcut to one, nothing is launched and the folder to navigate into is returned instead.
 pub fn open(hwnd: HWND, path: &str) -> Result<Option<String>, String> {
+    open_with_view(hwnd, path, None)
+}
+
+pub fn open_with_view(
+    hwnd: HWND,
+    path: &str,
+    view: Option<&super::open_site::View>,
+) -> Result<Option<String>, String> {
     com_init();
     unsafe {
         let pidl = Pidl::parse(path)?;
@@ -178,6 +184,15 @@ pub fn open(hwnd: HWND, path: &str) -> Result<Option<String>, String> {
                 if is_folder_pidl(&target) {
                     return Ok(Some(target.name(SIGDN_DESKTOPABSOLUTEPARSING)));
                 }
+            }
+        }
+        if let Some(view) = view {
+            match super::open_site::prepare(hwnd, path, view) {
+                Ok(command) => {
+                    command.invoke(hwnd)?;
+                    return Ok(None);
+                }
+                Err(error) => eprintln!("shell open view: {error}"),
             }
         }
         let mut info = SHELLEXECUTEINFOW {

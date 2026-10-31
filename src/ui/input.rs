@@ -489,7 +489,7 @@ fn act(hwnd: HWND, action: Action) {
         match action {
             Action::Open(paths) => {
                 for path in paths {
-                    let folder = crate::shell::ops::open(hwnd, &path).map_err(|error| {
+                    let folder = super::menu_actions::open_item(hwnd, &path).map_err(|error| {
                         windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error)
                     })?;
                     if let Some(path) = folder {

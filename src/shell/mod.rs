@@ -19,6 +19,7 @@ pub mod nav_options;
 pub mod network;
 pub mod newmenu;
 pub mod ops;
+pub mod open_site;
 pub mod preview;
 pub mod quick_access;
 pub mod search;

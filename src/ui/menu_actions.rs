@@ -11,6 +11,25 @@ fn error(error: String) -> Error {
     Error::new(E_FAIL, error)
 }
 
+pub(super) fn open_item(hwnd: HWND, path: &str) -> std::result::Result<Option<String>, String> {
+    let view = WINDOW.with(|slot| {
+        let slot = slot.borrow();
+        let window = slot.as_ref()?;
+        let folder = window.list.folder.as_ref()?;
+        let selected = folder
+            .order
+            .iter()
+            .position(|&index| folder.entries[index].path == path)?;
+        Some(crate::shell::open_site::View {
+            folder: window.tabs.active().location.tab.path().to_owned(),
+            selected: selected as i32,
+            sort: folder.view.snapshot().sort,
+            columns: folder.columns.iter().map(|column| column.key).collect(),
+        })
+    });
+    crate::shell::ops::open_with_view(hwnd, path, view.as_ref())
+}
+
 pub fn open_location(hwnd: HWND, path: String) -> Result<()> {
     let Some(parent) = std::path::Path::new(&path).parent() else {
         return Ok(());
@@ -365,7 +384,7 @@ pub fn run(hwnd: HWND, context: Context, action: Action) {
             }
             Action::OpenSelection => {
                 for path in paths {
-                    if let Some(path) = crate::shell::ops::open(hwnd, &path).map_err(error)? {
+                    if let Some(path) = open_item(hwnd, &path).map_err(error)? {
                         super::navigate(hwnd, super::Navigation::Open(path))?;
                         break;
                     }
