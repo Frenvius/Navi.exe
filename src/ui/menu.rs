@@ -683,7 +683,7 @@ fn label(
 
 fn draw(popup: &Popup, canvas: &Canvas, text: &mut TextEngine, theme: &Theme) -> Result<()> {
     if let Some(cloud) = &popup.cloud {
-        return cloud.draw(canvas, text, theme, popup.hover, popup.keyboard);
+        return cloud.draw(canvas, text, theme, popup.hover, popup.pressed, popup.keyboard);
     }
     let layout = &popup.layout;
     unsafe {

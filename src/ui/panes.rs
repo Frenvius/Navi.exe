@@ -544,63 +544,21 @@ fn button(
     y: f32,
     state: (bool, bool, bool),
 ) -> Result<()> {
-    let width = 48.0 + text.layout(value, SMALL, 4096.0)?.advance.ceil();
-    let bounds = super::address::rect(24.0, y, width, 29.0);
-    let stops: Vec<_> = theme
-        .control_elevation_border
-        .iter()
-        .map(|&(position, color)| D2D1_GRADIENT_STOP { position, color })
-        .collect();
-    unsafe {
-        let target: &ID2D1RenderTarget = &canvas.context;
-        let stops =
-            target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-        let mut properties = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES::default();
-        properties.startPoint.Y = y;
-        properties.endPoint.Y = y + 29.0;
-        let gradient = target.CreateLinearGradientBrush(&properties, None, &stops)?;
-        canvas.context.FillRoundedRectangle(
-            &D2D1_ROUNDED_RECT {
-                rect: bounds,
-                radiusX: 4.0,
-                radiusY: 4.0,
-            },
-            &gradient,
-        );
-    }
-    super::address::rounded(
-        canvas,
-        super::address::rect(25.0, y + 1.0, width - 2.0, 27.0),
-        3.0,
-        &if state.1 {
-            theme.control_pressed
-        } else if state.0 {
-            theme.control_hover
-        } else {
-            theme.control
-        },
-    );
-    assets.icon(canvas, icon, (36.0, y + 6.0), 1.0)?;
-    label(
+    let mut button = super::button::Button::new(value);
+    button.icon = Some((assets, icon));
+    button.state = super::button::State {
+        hovered: state.0,
+        pressed: state.1,
+        focused: state.2,
+        ..Default::default()
+    };
+    let width = button.width(text)?;
+    button.draw(
         canvas,
         text,
-        value,
-        SMALL,
-        super::address::rect(60.0, y, width - 48.0, 29.0),
-        &if state.1 {
-            theme.text_secondary
-        } else {
-            theme.text
-        },
-    )?;
-    if state.2 {
-        super::chrome::focus_ring(
-            canvas,
-            super::address::rect(21.0, y - 3.0, width + 6.0, 35.0),
-            theme,
-        );
-    }
-    Ok(())
+        theme,
+        super::address::rect(24.0, y, width, super::button::HEIGHT),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -654,14 +612,14 @@ fn hit(state: &State, text: &mut TextEngine, point: (f32, f32)) -> Option<Button
         if !visible {
             continue;
         }
-        let width = match text.layout(label, SMALL, 4096.0) {
-            Ok(value) => 48.0 + value.advance.ceil(),
+        let width = match super::button::Button::new(label).width(text) {
+            Ok(width) => width + super::button::ICON_SPACE,
             Err(error) => {
                 eprintln!("pane button geometry: {error}");
                 continue;
             }
         };
-        if x >= 24.0 && x < 24.0 + width && y >= top && y < top + 29.0 {
+        if x >= 24.0 && x < 24.0 + width && y >= top && y < top + super::button::HEIGHT {
             return Some(button);
         }
     }
@@ -995,4 +953,44 @@ pub fn key(hwnd: HWND, key: u32) -> bool {
         }
     });
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_buttons_hit_the_full_measured_width_and_32_pixel_height() -> Result<()> {
+        let mut text = TextEngine::new(96)?;
+        let mut state = State::default();
+        state.kind = Some(Kind::Details);
+        state.bounds = super::super::address::rect(800.0, 136.0, 300.0, 559.0);
+        state.model = Some(Arc::new(Model {
+            name: "Sample.txt".into(),
+            can_share: true,
+            can_properties: true,
+            ..Default::default()
+        }));
+        for (target, caption, top) in [
+            (Button::Share, crate::i18n::tr("cmd.share"), 288.0),
+            (
+                Button::Properties,
+                crate::i18n::tr("menu.properties"),
+                390.0,
+            ),
+        ] {
+            let width = super::super::button::Button::new(caption).width(&mut text)?
+                + super::super::button::ICON_SPACE;
+            assert_eq!(
+                hit(&state, &mut text, (824.0 + width - 0.5, 136.0 + top + 31.5)),
+                Some(target)
+            );
+            assert_eq!(
+                hit(&state, &mut text, (824.0 + width, 136.0 + top + 16.0)),
+                None
+            );
+            assert_eq!(hit(&state, &mut text, (850.0, 136.0 + top + 32.0)), None);
+        }
+        Ok(())
+    }
 }

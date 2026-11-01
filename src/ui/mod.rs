@@ -2,6 +2,7 @@ mod address;
 mod address_input;
 mod address_popup;
 mod bars;
+mod button;
 mod caret;
 mod check;
 mod chrome;

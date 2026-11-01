@@ -18,6 +18,19 @@ impl State {
         }
     }
 
+    fn caption(&self, target: Target) -> &'static str {
+        match target {
+            Target::Startup => value(Target::StartupChoice(self.startup)),
+            Target::Open(source) => value(Target::OpenIn(source, self.opening.destination(source))),
+            Target::Restore => "settings.action.restore",
+            Target::ZoxideInstall if self.zoxide_install == InstallState::Installing => {
+                "settings.zoxide.installing"
+            }
+            Target::ZoxideInstall if self.zoxide_winget => "settings.zoxide.install",
+            _ => "settings.action.open",
+        }
+    }
+
     fn control_width(&self, row: &Row) -> f32 {
         let width = row.bounds.right - row.bounds.left;
         let desired = match row.control {
@@ -31,7 +44,7 @@ impl State {
             ),
             Control::Toggle(_) => 136.0,
             Control::Expand => 32.0,
-            Control::Button => 120.0,
+            Control::Button => row.button_width,
         };
         desired.min((width - 32.0).max(40.0))
     }
@@ -168,6 +181,13 @@ impl State {
             title_height: 0.0,
             description_height: 0.0,
             control,
+            button_width: if matches!(control, Control::Button) {
+                super::super::button::Button::new(crate::i18n::tr(self.caption(target)))
+                    .width(text)?
+                    .max(120.0)
+            } else {
+                0.0
+            },
         };
         let stacked = width < 360.0;
         let room = (width
@@ -598,64 +618,22 @@ pub fn draw(
                     )?;
                 }
                 Control::Dropdown | Control::Button => {
-                    rounded(canvas, control, 4.0, &theme.control_border);
-                    rounded(
-                        canvas,
-                        rect(
-                            control.left + 1.0,
-                            control.top + 1.0,
-                            control.right - control.left - 2.0,
-                            30.0,
-                        ),
-                        3.0,
-                        if state.pressed == Some(row.target) {
-                            &theme.control_pressed
-                        } else if state.hover == Some(row.target) {
-                            &theme.control_hover
-                        } else {
-                            &theme.control
-                        },
-                    );
-                    let caption = match row.target {
-                        Target::Startup => value(Target::StartupChoice(state.startup)),
-                        Target::Open(source) => {
-                            value(Target::OpenIn(source, state.opening.destination(source)))
-                        }
-                        Target::Restore => "settings.action.restore",
-                        Target::ZoxideInstall if state.zoxide_winget => "settings.zoxide.install",
-                        _ => "settings.action.open",
+                    let mut button = super::super::button::Button::new(crate::i18n::tr(
+                        state.caption(row.target),
+                    ));
+                    button.dropdown = matches!(row.control, Control::Dropdown);
+                    button.variant = if row.target == Target::ZoxideInstall {
+                        super::super::button::Variant::Accent
+                    } else {
+                        super::super::button::Variant::Standard
                     };
-                    super::super::details::draw_line(
-                        canvas,
-                        text,
-                        crate::i18n::tr(caption),
-                        label(14.0, 400),
-                        rect(
-                            control.left + 12.0,
-                            control.top,
-                            control.right
-                                - control.left
-                                - if matches!(row.control, Control::Dropdown) {
-                                    40.0
-                                } else {
-                                    24.0
-                                },
-                            32.0,
-                        ),
-                        0.0,
-                        &theme.text,
-                    )?;
-                    if matches!(row.control, Control::Dropdown) {
-                        glyph(
-                            canvas,
-                            text,
-                            "\u{e70d}",
-                            control.right - 22.0,
-                            control.top + 11.0,
-                            10.0,
-                            &theme.text_secondary,
-                        )?;
-                    }
+                    button.state = super::super::button::State {
+                        enabled: row.target != Target::ZoxideInstall || state.install_enabled(),
+                        hovered: state.hover == Some(row.target),
+                        pressed: state.pressed == Some(row.target),
+                        focused: cues && focus == Focus::Settings(row.target),
+                    };
+                    button.draw(canvas, text, theme, control)?;
                 }
             }
         }
@@ -672,17 +650,22 @@ pub fn draw(
         if cues {
             if let Focus::Settings(target) = focus {
                 let r = state.bounds(target);
-                super::super::chrome::focus_ring_radius(
-                    canvas,
-                    rect(
-                        r.left - 2.0,
-                        r.top - 2.0,
-                        r.right - r.left + 4.0,
-                        r.bottom - r.top + 4.0,
-                    ),
-                    theme,
-                    4.0,
-                );
+                if !state.rows.iter().any(|row| {
+                    row.target == target
+                        && matches!(row.control, Control::Button | Control::Dropdown)
+                }) {
+                    super::super::chrome::focus_ring_radius(
+                        canvas,
+                        rect(
+                            r.left - 2.0,
+                            r.top - 2.0,
+                            r.right - r.left + 4.0,
+                            r.bottom - r.top + 4.0,
+                        ),
+                        theme,
+                        4.0,
+                    );
+                }
             }
         }
         Ok(())
@@ -764,6 +747,87 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_button_fits_busy_caption_and_disables_hit_testing() -> Result<()> {
+        let mut text = TextEngine::new(96)?;
+        for width in [400.0, 640.0, 1100.0] {
+            let mut state = State::default();
+            state.integrations = true;
+            state.expanded = true;
+            state.zoxide_winget = true;
+            state.zoxide_install = InstallState::Installing;
+            state.layout((width, 632.0), &mut text)?;
+            let bounds = state.bounds(Target::ZoxideInstall);
+            let caption = text.layout(
+                crate::i18n::tr(state.caption(Target::ZoxideInstall)),
+                super::super::super::button::TEXT,
+                4096.0,
+            )?;
+            assert!(bounds.right - bounds.left >= caption.advance + 24.0);
+            assert_eq!(bounds.bottom - bounds.top, 32.0);
+            assert!(!state.controls().contains(&Target::ZoxideInstall));
+            assert_eq!(
+                state.hit((
+                    (bounds.left + bounds.right) / 2.0,
+                    (bounds.top + bounds.bottom) / 2.0 + 88.0
+                )),
+                None
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_and_install_actions_render_all_states_without_using_backends() -> Result<()> {
+        use super::super::super::button::tests::{capture, states};
+        for dark in [true, false] {
+            for integrations in [false, true] {
+                for (name, button_state) in states() {
+                    if !integrations && !button_state.enabled {
+                        continue;
+                    }
+                    let target = if integrations {
+                        Target::ZoxideInstall
+                    } else {
+                        Target::Restore
+                    };
+                    let mut state = State::default();
+                    state.recovery = true;
+                    state.integrations = integrations;
+                    state.expanded = integrations;
+                    state.zoxide_winget = true;
+                    if !button_state.enabled {
+                        state.zoxide_install = InstallState::Installing;
+                    }
+                    state.hover = button_state.hovered.then_some(target);
+                    state.pressed = button_state.pressed.then_some(target);
+                    let scene = format!(
+                        "settings-{}-{}-{name}",
+                        if integrations { "install" } else { "recovery" },
+                        if dark { "dark" } else { "light" }
+                    );
+                    capture(&scene, (1100, 632), dark, |canvas, text, theme| {
+                        super::super::super::details::fill(
+                            canvas,
+                            rect(0.0, 0.0, 1100.0, 632.0),
+                            &theme.settings_background,
+                        );
+                        state.layout((1100.0, 632.0), text)?;
+                        draw(
+                            &mut state,
+                            canvas,
+                            text,
+                            theme,
+                            Focus::Settings(target),
+                            button_state.focused,
+                        )
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn responsive_cards_keep_wrapped_labels_clear_of_controls_and_clip_popup_to_viewport() {

@@ -152,6 +152,7 @@ impl State {
         text: &mut TextEngine,
         theme: &Theme,
         hover: Option<Hit>,
+        pressed: Option<Hit>,
         keyboard: bool,
     ) -> Result<()> {
         rounded(
@@ -214,10 +215,8 @@ impl State {
             }
             let r = self.bounds(slot);
             let hot = hover == Some(Hit::Row(slot));
-            if hot {
+            if hot && slot != 1 {
                 rounded(canvas, r, 4.0, &theme.subtle_hover);
-            } else if slot == 1 {
-                rounded(canvas, r, 4.0, &theme.cloud_manage);
             }
             let color = if command.state == 1 {
                 &theme.text_disabled
@@ -225,15 +224,14 @@ impl State {
                 &theme.text
             };
             if slot == 1 {
-                super::details::draw_line(
-                    canvas,
-                    text,
-                    &command.label,
-                    TextStyle::new(Family::Text, 14.0, 400),
-                    rect(r.left + 12.0, r.top - 1.0, 163.0, 32.0),
-                    0.0,
-                    color,
-                )?;
+                let mut button = super::button::Button::new(&command.label);
+                button.state = super::button::State {
+                    enabled: command.state == 0,
+                    hovered: hot,
+                    pressed: pressed == Some(Hit::Row(slot)),
+                    focused: hot && keyboard,
+                };
+                button.draw(canvas, text, theme, r)?;
             } else {
                 self.icons[slot].draw(
                     canvas,
@@ -264,7 +262,7 @@ impl State {
                     )?;
                 }
             }
-            if hot && keyboard {
+            if hot && keyboard && slot != 1 {
                 super::chrome::focus_ring_radius(
                     canvas,
                     rect(

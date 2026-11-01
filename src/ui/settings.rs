@@ -52,6 +52,7 @@ struct Row {
     title_height: f32,
     description_height: f32,
     control: Control,
+    button_width: f32,
 }
 
 #[derive(Default)]

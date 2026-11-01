@@ -6,7 +6,6 @@ macro_rules! palette {
         #[derive(Clone, Copy)]
         pub struct Theme {
             $(pub $name: D2D1_COLOR_F,)*
-            pub control_elevation_border: [(f32, D2D1_COLOR_F); 4],
         }
 
         impl Theme {
@@ -17,16 +16,9 @@ macro_rules! palette {
                 theme
             }
 
-            fn new(dark: bool) -> Self {
+            pub(super) fn new(dark: bool) -> Self {
                 Self {
                     $($name: color(if dark { $dark } else { $light }),)*
-                    control_elevation_border: if dark {
-                        [(0.0, color(0xffffff18)), (0.034, color(0xffffff18)),
-                         (0.103, color(0xffffff12)), (1.0, color(0xffffff12))]
-                    } else {
-                        [(0.0, color(0x00000029)), (0.034, color(0x00000029)),
-                         (0.103, color(0x0000000f)), (1.0, color(0x0000000f))]
-                    },
                 }
             }
         }
@@ -139,6 +131,13 @@ palette! {
     control_hover: (0xffffff15, 0xf9f9f980),
     control_pressed: (0xffffff0b, 0xf9f9f94d),
     control_border: (0xffffff12, 0x0000000f),
+    button_bottom: (0x00000026, 0x00000029),
+    button_disabled: (0xffffff0b, 0xf9f9f94d),
+    button_accent_disabled: (0xffffff28, 0x00000037),
+    button_accent_text: (0x000000ff, 0xffffffff),
+    button_accent_text_disabled: (0xffffff87, 0xffffffff),
+    button_accent_border: (0xffffff14, 0xffffff14),
+    button_accent_bottom: (0x00000066, 0x00000066),
     address_edit: (0x242424b3, 0xffffffff),
     search_focus: (0x1e1e1eb3, 0xffffffff),
     search_focus_border: (0xffffff12, 0x0000001a),
@@ -163,7 +162,6 @@ palette! {
     cloud_body: (0x343434ff, 0xfafafaff),
     cloud_divider: (0x2d2d2dff, 0xe5e5e5ff),
     cloud_footer: (0x2c2c2cff, 0xf3f3f3ff),
-    cloud_manage: (0x3b3b3bff, 0xffffffff),
     cloud_track: (0xafafafff, 0xb3b3b3ff),
     settings_toggle_on: (0x003e50ff, 0xffffffff),
     settings_background: (0x27282aff, 0xf3f3f3ff),
