@@ -70,9 +70,6 @@ pub fn broker_path() -> io::Result<PathBuf> {
 pub fn navi_path() -> io::Result<PathBuf> {
     Ok(directory()?.join("navi.exe"))
 }
-pub fn package_present() -> bool {
-    directory().is_ok_and(|path| path.is_dir())
-}
 
 fn pin_broker(path: &Path) -> io::Result<fs::File> {
     security::no_reparse(path)?;
@@ -598,6 +595,9 @@ fn verify_tree_security(view: View, path: &str, before: &Tree) -> io::Result<()>
     Ok(())
 }
 pub fn install(source: &Path) -> io::Result<()> {
+    if journal_path()?.exists() {
+        return repair();
+    }
     let build = Build::current()?;
     build.require()?;
     let _privileges = security::Privileges::acquire()?;

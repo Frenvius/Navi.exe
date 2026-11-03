@@ -64,6 +64,7 @@ impl Privileges {
                 "SeRestorePrivilege",
                 "SeTakeOwnershipPrivilege",
                 "SeSecurityPrivilege",
+                "SeDebugPrivilege",
             ] {
                 let mut luid = LUID::default();
                 LookupPrivilegeValueW(None, PCWSTR(wide(name).as_ptr()), &mut luid)

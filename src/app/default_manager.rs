@@ -404,6 +404,11 @@ fn elevated_host_helper(helper: &Path, arguments: &str, timeout: u32) -> io::Res
     }
 }
 
+fn helper_error(report: &Path) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(report).ok()?).ok()?;
+    value["error"].as_str().map(str::to_owned)
+}
+
 pub fn set_host_enabled(enabled: bool) -> io::Result<()> {
     if enabled {
         crate::explorer_host::version::Build::current()
@@ -430,15 +435,23 @@ pub fn set_host_enabled(enabled: bool) -> io::Result<()> {
                 ));
             }
         }
-        let action = if crate::explorer_host::install::package_present() {
-            "--repair".into()
-        } else {
-            format!(
-                "--install --source {}",
-                crate::shell::jumplist::quote(&parent.to_string_lossy())
-            )
-        };
-        elevated_host_helper(&helper, &action, 120000)?;
+        let report = std::env::temp_dir().join(format!("navi-host-{}.json", std::process::id()));
+        let _ = fs::remove_file(&report);
+        let result = elevated_host_helper(
+            &helper,
+            &format!(
+                "--install --source {} --out {}",
+                crate::shell::jumplist::quote(&parent.to_string_lossy()),
+                crate::shell::jumplist::quote(&report.to_string_lossy())
+            ),
+            120000,
+        );
+        let detail = helper_error(&report);
+        let _ = fs::remove_file(&report);
+        result.map_err(|error| match detail {
+            Some(detail) => io::Error::other(format!("{error} ({detail})")),
+            None => error,
+        })?;
         if !crate::explorer_host::install::broker_path()?.is_file()
             || !crate::explorer_host::install::registered()
         {
