@@ -1,8 +1,11 @@
 #ifndef AppVersion
   #error Pass the version with /DAppVersion=x.y.z
 #endif
+#ifndef SourceDir
+  #define SourceDir "..\target\release"
+#endif
 #ifndef SourceExe
-  #define SourceExe "..\target\release\navi.exe"
+  #define SourceExe SourceDir + "\navi.exe"
 #endif
 
 [Setup]
@@ -42,6 +45,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\navi-explorer-host.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\navi-explorer-guard.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
