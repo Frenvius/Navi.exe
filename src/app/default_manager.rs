@@ -1,5 +1,4 @@
-//! Per-user associations only. Raw registry bytes preserve type, presence and even
-//! noncanonical string encodings. The durable journal precedes every registry write.
+use crate::explorer_host::journal::Value;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -11,12 +10,6 @@ use winreg::{enums::*, RegKey, RegValue};
 
 const WIN_E: &str =
     r"Software\Classes\CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}\shell\opennewwindow\command";
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Value {
-    kind: u32,
-    bytes: Vec<u8>,
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -221,7 +214,6 @@ fn validate(b: &Backup) -> io::Result<()> {
 }
 fn restore(reg: &mut impl Registry, b: &Backup) -> io::Result<()> {
     validate(b)?;
-    // Fail before changing anything if another manager changed a touched value.
     for r in &b.records {
         let now = reg.read(&r.key, &r.name)?;
         if now != Some(r.after.clone()) && now != r.before {
@@ -285,7 +277,6 @@ fn save(path: &Path, b: &Backup) -> io::Result<()> {
     f.write_all(&bytes)?;
     f.sync_all()?;
     drop(f);
-    // The per-user mutex makes the existence check + rename exclusive to this app.
     if path.exists() {
         return Err(issue("settings.default.active-backup"));
     }
@@ -344,6 +335,147 @@ pub struct Status {
     pub enabled: bool,
     pub recovery: bool,
 }
+pub fn host_enabled() -> bool {
+    crate::explorer_host::opted_in()
+}
+
+pub fn recover_host_on_startup() -> io::Result<()> {
+    use crate::explorer_host::install;
+    if !install::startup_recovery_needed()? {
+        return Ok(());
+    }
+    if unsafe { windows::Win32::UI::Shell::IsUserAnAdmin().as_bool() } {
+        install::recover_from_startup()?;
+    } else {
+        elevated_host_helper(&std::env::current_exe()?, install::RECOVER_ARGUMENT, 10000)?;
+    }
+    if install::startup_recovery_needed()? {
+        return Err(issue("settings.host.install-failed"));
+    }
+    Ok(())
+}
+
+fn elevated_host_helper(helper: &Path, arguments: &str, timeout: u32) -> io::Result<()> {
+    use windows::{
+        core::{w, PCWSTR},
+        Win32::{
+            System::{Com::*, Threading::*},
+            UI::{Shell::*, WindowsAndMessaging::SW_HIDE},
+        },
+    };
+    let path = crate::shell::wide(&helper.to_string_lossy());
+    let arguments = crate::shell::wide(arguments);
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            .ok()
+            .map_err(io::Error::other)?;
+        let result = (|| -> io::Result<()> {
+            let mut info = SHELLEXECUTEINFOW {
+                cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+                fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI,
+                lpVerb: w!("runas"),
+                lpFile: PCWSTR(path.as_ptr()),
+                lpParameters: PCWSTR(arguments.as_ptr()),
+                nShow: SW_HIDE.0,
+                ..Default::default()
+            };
+            ShellExecuteExW(&mut info).map_err(|error| {
+                issue(
+                    if error.code() == windows::Win32::Foundation::ERROR_CANCELLED.to_hresult() {
+                        "settings.host.cancelled"
+                    } else {
+                        "settings.host.install-failed"
+                    },
+                )
+            })?;
+            let handle = crate::explorer_host::transport::Owned(info.hProcess);
+            if WaitForSingleObject(handle.0, timeout) != windows::Win32::Foundation::WAIT_OBJECT_0 {
+                return Err(issue("settings.host.timeout"));
+            }
+            let mut code = 0;
+            GetExitCodeProcess(handle.0, &mut code).map_err(io::Error::other)?;
+            if code != 0 {
+                return Err(issue("settings.host.install-failed"));
+            }
+            Ok(())
+        })();
+        CoUninitialize();
+        result
+    }
+}
+
+pub fn set_host_enabled(enabled: bool) -> io::Result<()> {
+    if enabled {
+        crate::explorer_host::version::Build::current()
+            .and_then(|build| build.require())
+            .map_err(|_| issue("settings.host.windows-unavailable"))?;
+        let source = std::env::current_exe()?;
+        let parent = source
+            .parent()
+            .ok_or_else(|| issue("settings.default.backup-unavailable"))?;
+        let helper = parent.join("navi-explorer-host.exe");
+        for name in [
+            "navi-explorer-host.exe",
+            "navi-explorer-guard.exe",
+            "navi.exe",
+        ] {
+            let component = parent.join(name);
+            if !component.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    crate::i18n::trf(
+                        "settings.host.missing-binary",
+                        &[&component.to_string_lossy()],
+                    ),
+                ));
+            }
+        }
+        let action = if crate::explorer_host::install::package_present() {
+            "--repair".into()
+        } else {
+            format!(
+                "--install --source {}",
+                crate::shell::jumplist::quote(&parent.to_string_lossy())
+            )
+        };
+        elevated_host_helper(&helper, &action, 120000)?;
+        if !crate::explorer_host::install::broker_path()?.is_file()
+            || !crate::explorer_host::install::registered()
+        {
+            return Err(issue("settings.host.install-failed"));
+        }
+        let key = RegKey::predef(HKEY_CURRENT_USER)
+            .create_subkey(r"Software\Navi")?
+            .0;
+        let identity = crate::explorer_host::transport::identity(std::process::id())
+            .map_err(io::Error::other)?;
+        key.set_value(
+            "ExplorerHostNaviPath",
+            &source.to_string_lossy().to_string(),
+        )?;
+        key.set_value("ExplorerHostSession", &identity.session)?;
+        return key.set_value("ExplorerHostOptIn", &1u32);
+    }
+    match RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(r"Software\Navi", KEY_SET_VALUE)
+    {
+        Ok(key) => {
+            for name in [
+                "ExplorerHostOptIn",
+                "ExplorerHostSession",
+                "ExplorerHostNaviPath",
+            ] {
+                match key.delete_value(name) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                    Ok(()) => {}
+                }
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
 pub fn status() -> io::Result<Status> {
     let _lock = Lock::acquire()?;
     let exe = std::env::current_exe()?;
@@ -390,7 +522,6 @@ pub fn set_enabled(enabled: bool) -> io::Result<()> {
     {
         return Err(issue("settings.default.missing-backup"));
     }
-    // Refuse arrangements this feature does not own; never delete DDE or handlers.
     let classes = RegKey::predef(HKEY_CLASSES_ROOT);
     for (key, _, _) in targets(&std::env::current_exe()?) {
         if !key.ends_with(r"\command") {

@@ -69,6 +69,9 @@ pub fn start(hwnd: HWND, launch: &crate::app::entry::Launch) -> Result<Vec<(Stri
 }
 
 pub fn checkpoint_window(hwnd: HWND, window: &mut super::Window) -> Result<()> {
+    if super::launch::host_staging(hwnd) {
+        return Ok(());
+    }
     if window.journal.is_none() {
         return Ok(());
     }

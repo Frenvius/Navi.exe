@@ -1,4 +1,7 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, RegisterWindowMessageW, WM_APP};
@@ -22,6 +25,24 @@ thread_local! {
     static PUBLISHED: RefCell<HashMap<usize, Published>> = RefCell::new(HashMap::new());
     static REQUESTS: RefCell<HashMap<usize, Vec<(String, Request)>>> = RefCell::new(HashMap::new());
     static TASKBAR_CREATED: u32 = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+    static UPDATING: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+}
+
+struct Updating(usize);
+
+impl Updating {
+    fn enter(hwnd: HWND) -> Option<Self> {
+        let key = hwnd.0 as usize;
+        UPDATING
+            .with(|slot| slot.borrow_mut().insert(key))
+            .then(|| Self(key))
+    }
+}
+
+impl Drop for Updating {
+    fn drop(&mut self) {
+        UPDATING.with(|slot| slot.borrow_mut().remove(&self.0));
+    }
 }
 
 fn publishable(path: &str) -> bool {
@@ -29,6 +50,15 @@ fn publishable(path: &str) -> bool {
 }
 
 pub fn sync(hwnd: HWND) {
+    if super::launch::host_staging(hwnd)
+        || super::launch::host_unpublished(hwnd)
+        || !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool() }
+    {
+        return;
+    }
+    let Some(_updating) = Updating::enter(hwnd) else {
+        return;
+    };
     let key = hwnd.0 as usize;
     let path = super::WINDOW.with(|slot| {
         slot.borrow()
@@ -63,6 +93,9 @@ pub fn sync(hwnd: HWND) {
             }
         }
     };
+    if !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(hwnd)).as_bool() } {
+        return;
+    }
     PUBLISHED.with(|slot| {
         slot.borrow_mut()
             .insert(key, Published { path, registration });
@@ -80,8 +113,12 @@ pub fn taskbar_created() -> u32 {
 }
 
 pub fn restart(hwnd: HWND) {
+    let Some(updating) = Updating::enter(hwnd) else {
+        return;
+    };
     let published = PUBLISHED.with(|slot| slot.borrow_mut().remove(&(hwnd.0 as usize)));
     drop(published);
+    drop(updating);
     sync(hwnd);
 }
 
@@ -224,8 +261,29 @@ fn handle(hwnd: HWND, folder: &str, request: Request) {
 }
 
 pub fn close(hwnd: HWND) {
+    let _updating = Updating::enter(hwnd);
     let key = hwnd.0 as usize;
     REQUESTS.with(|slot| slot.borrow_mut().remove(&key));
     let published = PUBLISHED.with(|slot| slot.borrow_mut().remove(&key));
     drop(published);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn com_reentry_keeps_the_outer_publication_guard() {
+        let hwnd = HWND(121usize as _);
+        let other = HWND(122usize as _);
+        let outer = Updating::enter(hwnd).unwrap();
+        assert!(Updating::enter(hwnd).is_none());
+        assert!(Updating::enter(hwnd).is_none());
+        let independent = Updating::enter(other).unwrap();
+        assert!(Updating::enter(hwnd).is_none());
+        drop(independent);
+        assert!(Updating::enter(other).is_some());
+        drop(outer);
+        assert!(Updating::enter(hwnd).is_some());
+    }
 }

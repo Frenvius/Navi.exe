@@ -596,3 +596,48 @@ msgstr "Abrir"
 
 msgid "settings.action.restore"
 msgstr "Restaurar"
+
+msgid "settings.host.title"
+msgstr "Aberturas diretas pelo Explorer (experimental)"
+
+msgid "settings.host.description"
+msgstr "Abrir no Navi as pastas iniciadas diretamente pelo Explorer. Exige permissão de administrador para instalar neste computador; o encaminhamento vale apenas para seu usuário e sessão atuais."
+
+msgid "settings.experimental"
+msgstr "Experimental"
+
+msgid "settings.host.error"
+msgstr "Host do Explorer: {}"
+
+msgid "settings.host.missing-binary"
+msgstr "Arquivo necessário ausente: {}. A integração continua desligada e o registro do Explorer não foi alterado. Restaure o pacote completo do Navi antes de tentar novamente."
+
+msgid "settings.host.warning.title"
+msgstr "Host experimental do Explorer"
+
+msgid "settings.host.warning.body"
+msgstr "O Microsoft Defender já detectou esta integração como Behavior:Win32/Persistence.A!ml e pode colocar o broker em quarentena. Abrir pastas pode falhar ou demorar; a recuperação é experimental.\n\nAtivar altera o registro do Explorer neste computador após aprovação de administrador. O encaminhamento ao Navi exige opt-in do seu usuário e sessão atuais.\n\nOs comandos opcionais abaixo reduzem a proteção: a exclusão de processo pode deixar arquivos acessados pelo broker sem verificação. Copie e execute você mesmo no PowerShell como administrador somente se aceitar esse risco. O Navi nunca os executa nem altera exclusões do Defender. Assinar não garante aceitação."
+
+msgid "settings.host.warning.copy"
+msgstr "Copiar comandos"
+
+msgid "settings.host.warning.enable"
+msgstr "Aceitar riscos e ativar"
+
+msgid "settings.host.warning.cancel"
+msgstr "Cancelar"
+
+msgid "settings.host.windows-unavailable"
+msgstr "Esta integração não está disponível nesta versão do Windows. As pastas continuam abrindo no Explorador de Arquivos."
+
+msgid "settings.host.cancelled"
+msgstr "Instalação cancelada. A integração continua desativada."
+
+msgid "settings.host.install-failed"
+msgstr "Não foi possível concluir a instalação da integração."
+
+msgid "settings.host.timeout"
+msgstr "O instalador da integração não terminou no tempo esperado."
+
+msgid "settings.host.recovery-failed"
+msgstr "O broker do Explorer está ausente, mas não foi possível confirmar a restauração do Explorer nativo: {}\n\nAbrir pastas pode continuar lento. A restauração do registro deste computador exige permissão de administrador; abra o Navi novamente e autorize o pedido do Windows."

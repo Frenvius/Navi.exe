@@ -36,6 +36,7 @@ pub struct Launch {
     pub select: Option<String>,
     pub restore: Option<String>,
     pub startup: bool,
+    pub host_bootstrap: bool,
 }
 impl Launch {
     fn delivery_mode(&self, preferences: super::launch_preferences::Preferences) -> Mode {
@@ -153,6 +154,20 @@ pub fn same(a: &str, b: &str) -> bool {
 }
 
 pub fn parse(args: &[String]) -> Result<Launch, String> {
+    if args
+        .first()
+        .is_some_and(|value| value == "--explorer-host-bootstrap")
+    {
+        if args.len() > 2 {
+            return Err("Invalid bootstrap arguments".into());
+        }
+        return Ok(Launch {
+            mode: Mode::NewWindow,
+            host_bootstrap: true,
+            path: args.get(1).map(|path| normalize(path)).transpose()?,
+            ..Default::default()
+        });
+    }
     let mut result = Launch::default();
     let mut target = None;
     let mut select = false;
@@ -501,7 +516,11 @@ pub fn start() -> Result<bool, String> {
         return Ok(true);
     }
     let mut launch = parse(&args)?;
-    launch.startup = launch.mode == Mode::Default
+    if launch.host_bootstrap && !crate::explorer_host::enabled() {
+        return Ok(true);
+    }
+    launch.startup = !launch.host_bootstrap
+        && launch.mode == Mode::Default
         && launch.path.is_none()
         && launch.select.is_none()
         && launch.restore.is_none();
@@ -533,6 +552,28 @@ mod tests {
     use super::*;
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+    #[test]
+    fn host_bootstrap_is_hidden_and_cannot_carry_a_navigation_request() {
+        let launch = parse(&args(&["--explorer-host-bootstrap"])).unwrap();
+        assert!(launch.host_bootstrap);
+        assert!(launch.path.is_none());
+        assert!(launch.select.is_none());
+        assert_eq!(launch.mode, Mode::NewWindow);
+        assert_eq!(
+            parse(&args(&["--explorer-host-bootstrap", r"C:\Windows"]))
+                .unwrap()
+                .path
+                .as_deref(),
+            Some(r"C:\Windows")
+        );
+        assert!(parse(&args(&[
+            "--explorer-host-bootstrap",
+            r"C:\Windows",
+            "extra"
+        ]))
+        .is_err());
+        assert!(!parse(&args(&[r"C:\Windows"])).unwrap().host_bootstrap);
     }
     #[test]
     fn external_and_win_e_destinations_are_independent_and_explicit_modes_win() {

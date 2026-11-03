@@ -184,12 +184,21 @@ fn create_window(path: &str, started: std::time::Instant) -> Result<HWND> {
     create_window_with_launch(path, started, &launch)
 }
 
+fn create_host_window(path: &str) -> Result<HWND> {
+    let launch = crate::app::entry::Launch {
+        mode: crate::app::entry::Mode::NewWindow,
+        path: Some(path.into()),
+        host_bootstrap: true,
+        ..Default::default()
+    };
+    create_window_with_launch(path, std::time::Instant::now(), &launch)
+}
+
 fn create_window_with_launch(
     path: &str,
     started: std::time::Instant,
     launch: &crate::app::entry::Launch,
 ) -> Result<HWND> {
-    let renderer = context::renderer()?;
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP,
@@ -206,16 +215,42 @@ fn create_window_with_launch(
             None,
         )?
     };
-    if let Err(error) = initialize(hwnd, renderer, path, started) {
+    let initialized = (|| -> Result<()> {
+        let worker = list::Worker::start().map_err(|error| {
+            windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
+        })?;
+        let list = list::List::start(&worker, hwnd, path.to_string(), None).map_err(|error| {
+            windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
+        })?;
+        let renderer = context::renderer()?;
+        initialize(hwnd, renderer, path, started, worker, list)?;
+        unsafe {
+            PostMessageW(Some(hwnd), list::READY, WPARAM(0), LPARAM(0))?;
+        }
+        if !launch.host_bootstrap {
+            crate::frame::restore_placement(hwnd)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = initialized {
         if let Err(cleanup) = unsafe { DestroyWindow(hwnd) } {
             eprintln!("native window cleanup: {cleanup}");
         }
         return Err(error);
     }
+    if !launch.host_bootstrap {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+    }
     if let Err(error) = jumplist::start(hwnd) {
         eprintln!("native taskbar identity: {error}");
     }
-    let others = match session::start(hwnd, launch) {
+    let others = match if launch.host_bootstrap {
+        Ok(Vec::new())
+    } else {
+        session::start(hwnd, launch)
+    } {
         Ok(others) => others,
         Err(error) => {
             eprintln!("native session start: {error}");
@@ -249,7 +284,11 @@ fn create_window_with_launch(
             launch::select(hwnd, vec![path.clone()]);
         }
         crate::app::entry::ready_window(hwnd);
-        if launch.path.is_some() || launch.mode == crate::app::entry::Mode::NewWindow {
+        crate::explorer_host::transport::set_target(hwnd);
+        crate::explorer_host::transport::start();
+        if launch.host_bootstrap {
+            launch::bootstrap(hwnd);
+        } else if launch.path.is_some() || launch.mode == crate::app::entry::Mode::NewWindow {
             launch::activate(hwnd);
         }
     }
@@ -261,6 +300,8 @@ fn initialize(
     renderer: Rc<Renderer>,
     path: &str,
     started: std::time::Instant,
+    worker: list::Worker,
+    list: list::List,
 ) -> Result<()> {
     let _context = context::enter(hwnd);
     crate::frame::native_window(hwnd);
@@ -279,12 +320,6 @@ fn initialize(
     }
     let text = text::TextEngine::new(unsafe { GetDpiForWindow(hwnd) })?;
     memory::checkpoint("dwrite-factory");
-    let worker = list::Worker::start().map_err(|error| {
-        windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
-    })?;
-    let list = list::List::start(&worker, hwnd, path.to_string(), None).map_err(|error| {
-        windows::core::Error::new(windows::Win32::Foundation::E_FAIL, error.to_string())
-    })?;
     let preferences = preferences::Watch::start(hwnd)?;
     unsafe {
         windows::Win32::System::DataExchange::AddClipboardFormatListener(hwnd)?;
@@ -343,7 +378,6 @@ fn initialize(
     crate::dnd::register(hwnd, Box::new(drop::Adapter(hwnd)))?;
     crate::app::tab_transfer::install(hwnd);
     cut::update(hwnd);
-    crate::frame::restore_placement(hwnd)?;
     unsafe {
         SetWindowPos(
             hwnd,
@@ -354,7 +388,6 @@ fn initialize(
             0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         )?;
-        let _ = ShowWindow(hwnd, SW_SHOW);
         invalidate_all(hwnd);
     }
     Ok(())
@@ -506,6 +539,14 @@ unsafe extern "system" fn window_proc(
         }
         launch::READY => {
             launch::ready(hwnd);
+            return LRESULT(0);
+        }
+        crate::explorer_host::transport::READY => {
+            launch::host_ready(hwnd);
+            return LRESULT(0);
+        }
+        settings::HOST_READY => {
+            settings::host_ready(hwnd);
             return LRESULT(0);
         }
         hosted::READY => {
@@ -1105,8 +1146,10 @@ unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
             session::finish(hwnd);
-            if let Err(error) = crate::frame::save_placement(hwnd) {
-                eprintln!("save placement: {error}");
+            if !launch::host_unpublished(hwnd) {
+                if let Err(error) = crate::frame::save_placement(hwnd) {
+                    eprintln!("save placement: {error}");
+                }
             }
         }
         WM_DESTROY => {
@@ -1144,6 +1187,7 @@ unsafe extern "system" fn window_proc(
 }
 
 fn paint_window(hwnd: HWND) -> Result<()> {
+    launch::host_before_paint(hwnd);
     let paint_started = std::time::Instant::now();
     let window = WINDOW.with(|window| window.borrow_mut().take());
     let Some(mut window) = window else {

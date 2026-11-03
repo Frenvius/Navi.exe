@@ -14,11 +14,35 @@ use windows::{
     Win32::{Foundation::HWND, Graphics::Direct2D::Common::*},
 };
 
+#[path = "settings_host.rs"]
+mod host;
 #[path = "settings_view.rs"]
 mod view;
 pub use view::draw;
 
 const ANIMATION: usize = 91;
+pub const HOST_READY: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 60;
+static HOST_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static HOST_RESULT: std::sync::Mutex<Option<std::result::Result<(), String>>> =
+    std::sync::Mutex::new(None);
+
+pub fn host_ready(hwnd: HWND) {
+    let result = HOST_RESULT.lock().ok().and_then(|mut result| result.take());
+    if let Some(result) = result {
+        WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow_mut().as_mut() {
+                window.settings.host_error = result
+                    .err()
+                    .map(|error| crate::i18n::trf("settings.host.error", &[&error]))
+                    .unwrap_or_default();
+            }
+        });
+        crate::explorer_host::transport::set_target(hwnd);
+        crate::explorer_host::transport::start();
+        refresh(hwnd);
+        super::invalidate_all(hwnd);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -29,6 +53,7 @@ pub enum Target {
     Open(Source),
     OpenIn(Source, Destination),
     Toggle,
+    ExplorerHost,
     Restore,
     ExpandZoxide,
     Zoxide(ZoxideSetting),
@@ -60,6 +85,9 @@ pub struct State {
     pub active: bool,
     loaded: bool,
     enabled: bool,
+    host_enabled: bool,
+    host_available: bool,
+    host_error: String,
     recovery: bool,
     error: String,
     opening: Preferences,
@@ -84,7 +112,7 @@ pub struct State {
     rows: Vec<Row>,
     groups: Vec<(f32, &'static str)>,
     notices: Vec<(D2D_RECT_F, String)>,
-    toggles: [super::toggle::Motion; 3],
+    toggles: [super::toggle::Motion; 4],
 }
 
 impl State {
@@ -228,6 +256,8 @@ pub fn refresh(hwnd: HWND) {
     let zoxide = ZoxidePreferences::read();
     let install = zoxide_install::state();
     let winget = zoxide_install::winget_available();
+    let host_enabled = crate::app::default_manager::host_enabled();
+    let host_available = crate::explorer_host::version::verified();
     let mut detect = None;
     let changed = WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -236,6 +266,8 @@ pub fn refresh(hwnd: HWND) {
         };
         let s = &mut window.settings;
         let before = (
+            s.host_enabled,
+            s.host_available,
             s.enabled,
             s.recovery,
             s.error.clone(),
@@ -247,6 +279,8 @@ pub fn refresh(hwnd: HWND) {
             s.startup,
             s.startup_error.clone(),
         );
+        s.host_enabled = host_enabled;
+        s.host_available = host_available;
         if !s.loaded || s.zoxide_recheck {
             detect = Some(s.zoxide_recheck);
             s.zoxide_recheck = false;
@@ -296,6 +330,8 @@ pub fn refresh(hwnd: HWND) {
         }
         before
             != (
+                s.host_enabled,
+                s.host_available,
                 s.enabled,
                 s.recovery,
                 s.error.clone(),
@@ -345,6 +381,60 @@ pub fn after_paint(hwnd: HWND) {
     }
 }
 fn activate(hwnd: HWND, target: Target) {
+    if target == Target::ExplorerHost {
+        if HOST_BUSY.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let enabled = crate::app::default_manager::host_enabled();
+        if !enabled && !crate::explorer_host::version::verified() {
+            return;
+        }
+        if !enabled {
+            let confirmed = crate::explorer_host::install::broker_path()
+                .map_err(windows::core::Error::from)
+                .and_then(|path| host::confirm(hwnd, &path));
+            match confirmed {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    WINDOW.with(|slot| {
+                        if let Some(window) = slot.borrow_mut().as_mut() {
+                            window.settings.host_error =
+                                crate::i18n::trf("settings.host.error", &[&error.to_string()]);
+                        }
+                    });
+                    invalidate(hwnd);
+                    return;
+                }
+            }
+        }
+        if HOST_BUSY.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let target = hwnd.0 as usize;
+        let task = std::thread::Builder::new()
+            .name("explorer-host-install".into())
+            .spawn(move || {
+                let result = crate::app::default_manager::set_host_enabled(!enabled)
+                    .map_err(|error| error.to_string());
+                if let Ok(mut pending) = HOST_RESULT.lock() {
+                    *pending = Some(result);
+                }
+                HOST_BUSY.store(false, std::sync::atomic::Ordering::Release);
+                unsafe {
+                    let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                        Some(HWND(target as _)),
+                        HOST_READY,
+                        Default::default(),
+                        Default::default(),
+                    );
+                }
+            });
+        if task.is_err() {
+            HOST_BUSY.store(false, std::sync::atomic::Ordering::Release);
+        }
+        return;
+    }
     let cues = WINDOW.with(|slot| slot.borrow().as_ref().is_some_and(|w| w.chrome.cues));
     if matches!(
         target,
@@ -543,6 +633,12 @@ impl State {
     fn motion(&mut self, animate: bool) {
         for (index, target, on, available) in [
             (0, Target::Toggle, self.enabled, true),
+            (
+                3,
+                Target::ExplorerHost,
+                self.host_enabled,
+                self.host_available || self.host_enabled,
+            ),
             (
                 1,
                 Target::Zoxide(ZoxideSetting::Integration),

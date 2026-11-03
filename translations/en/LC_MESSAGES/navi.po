@@ -618,3 +618,48 @@ msgstr "Open"
 
 msgid "settings.action.restore"
 msgstr "Restore"
+
+msgid "settings.host.title"
+msgstr "Direct Explorer launches (experimental)"
+
+msgid "settings.host.description"
+msgstr "Open folders launched directly through Explorer in Navi. Requires administrator permission to install for this computer; routing is enabled only for your current user and session."
+
+msgid "settings.experimental"
+msgstr "Experimental"
+
+msgid "settings.host.error"
+msgstr "Explorer host: {}"
+
+msgid "settings.host.missing-binary"
+msgstr "Required file missing: {}. The integration remains off and Explorer registration was not changed. Restore the complete Navi package before trying again."
+
+msgid "settings.host.warning.title"
+msgstr "Experimental Explorer host"
+
+msgid "settings.host.warning.body"
+msgstr "Microsoft Defender has detected this integration as Behavior:Win32/Persistence.A!ml and may quarantine its broker. Folder opening may fail or take longer; recovery is experimental.\n\nEnabling changes this computer's Explorer registration after administrator approval. Navi routing is opt-in for your current user and session.\n\nThe optional commands below reduce protection: the process exclusion can leave files accessed by the broker unscanned. Only copy and run them yourself in an administrator PowerShell if you accept this risk. Navi never runs them or changes Defender exclusions. Signing does not guarantee acceptance."
+
+msgid "settings.host.warning.copy"
+msgstr "Copy commands"
+
+msgid "settings.host.warning.enable"
+msgstr "Accept risks and enable"
+
+msgid "settings.host.warning.cancel"
+msgstr "Cancel"
+
+msgid "settings.host.windows-unavailable"
+msgstr "This integration is unavailable on this Windows version. Folders continue to open in File Explorer."
+
+msgid "settings.host.cancelled"
+msgstr "Installation cancelled. The integration remains off."
+
+msgid "settings.host.install-failed"
+msgstr "The integration installation could not be completed."
+
+msgid "settings.host.timeout"
+msgstr "The integration installer did not finish in time."
+
+msgid "settings.host.recovery-failed"
+msgstr "The Explorer broker is missing, but native Explorer recovery could not be confirmed: {}\n\nOpening folders may remain slow. Restoring this computer's registration requires administrator permission; reopen Navi and approve the Windows prompt."

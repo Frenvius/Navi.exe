@@ -144,6 +144,9 @@ impl State {
             .iter()
             .filter(|row| !matches!(row.target, Target::Zoxide(_)) || self.zoxide.available)
             .filter(|row| row.target != Target::ZoxideInstall || self.install_enabled())
+            .filter(|row| {
+                row.target != Target::ExplorerHost || self.host_available || self.host_enabled
+            })
             .find_map(|row| contains(self.bounds(row.target), p).then_some(row.target))
             .or_else(|| {
                 self.rows.iter().find_map(|row| {
@@ -341,6 +344,23 @@ impl State {
                     Control::Button,
                 )?;
             }
+            top += 22.0;
+            self.group(&mut top, "settings.experimental");
+            self.add_row(
+                &mut top,
+                text,
+                Target::ExplorerHost,
+                "\u{e7ba}",
+                "settings.host.title",
+                crate::i18n::tr(if self.host_available {
+                    "settings.host.description"
+                } else {
+                    "settings.host.windows-unavailable"
+                })
+                .into(),
+                Control::Toggle(3),
+            )?;
+            self.notice(&mut top, text, self.host_error.clone())?;
         }
         self.maximum = (top + 20.0 - self.size.1).max(0.0);
         self.offset = self.offset.clamp(0.0, self.maximum);
@@ -365,6 +385,9 @@ impl State {
                 self.rows
                     .iter()
                     .map(|row| row.target)
+                    .filter(|target| {
+                        *target != Target::ExplorerHost || self.host_available || self.host_enabled
+                    })
                     .filter(|target| !matches!(target, Target::Zoxide(_)) || self.zoxide.available)
                     .filter(|target| *target != Target::ZoxideInstall || self.install_enabled()),
             )
@@ -572,9 +595,14 @@ pub fn draw(
                     let on = match index {
                         0 => state.enabled,
                         1 => state.zoxide.enabled,
+                        3 => state.host_enabled,
                         _ => state.zoxide.record,
                     };
-                    let available = index == 0 || state.zoxide.available;
+                    let available = match index {
+                        0 => true,
+                        3 => state.host_available || state.host_enabled,
+                        _ => state.zoxide.available,
+                    };
                     let caption = crate::i18n::tr(if on {
                         "settings.state.on"
                     } else {
@@ -747,6 +775,42 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn experimental_section_is_visible_off_by_default_and_can_disable_an_unsupported_opt_in(
+    ) -> Result<()> {
+        let mut text = TextEngine::new(96)?;
+        for width in [400.0, 640.0, 1100.0] {
+            let mut state = State::default();
+            state.layout((width, 632.0), &mut text)?;
+            assert!(state
+                .groups
+                .iter()
+                .any(|(_, key)| *key == "settings.experimental"));
+            assert!(state
+                .rows
+                .iter()
+                .any(|row| row.target == Target::ExplorerHost));
+            assert!(!state.host_enabled);
+            assert!(!state.controls().contains(&Target::ExplorerHost));
+            state.host_available = true;
+            assert!(state.controls().contains(&Target::ExplorerHost));
+            state.host_available = false;
+            state.host_enabled = true;
+            assert!(state.controls().contains(&Target::ExplorerHost));
+            state.offset = state.maximum;
+            state.layout((width, 632.0), &mut text)?;
+            let bounds = state.bounds(Target::ExplorerHost);
+            assert_eq!(
+                state.hit((
+                    (bounds.left + bounds.right) / 2.0,
+                    (bounds.top + bounds.bottom) / 2.0 + 88.0
+                )),
+                Some(Target::ExplorerHost)
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn install_button_fits_busy_caption_and_disables_hit_testing() -> Result<()> {
