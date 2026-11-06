@@ -8,6 +8,7 @@ pub mod drop;
 pub mod entry;
 pub(crate) mod filter;
 pub(crate) mod focus;
+pub(crate) mod folder_size;
 pub mod format;
 pub mod gallery;
 pub mod grid_layout;

@@ -147,6 +147,7 @@ impl State {
             .filter(|row| {
                 row.target != Target::ExplorerHost || self.host_available || self.host_enabled
             })
+            .filter(|row| self.available(row.target))
             .find_map(|row| contains(self.bounds(row.target), p).then_some(row.target))
             .or_else(|| {
                 self.rows.iter().find_map(|row| {
@@ -322,6 +323,33 @@ impl State {
             }
             self.notice(&mut top, text, self.opening_error.clone())?;
             top += 22.0;
+            self.group(&mut top, "settings.group.folders");
+            self.add_row(
+                &mut top,
+                text,
+                Target::FolderSizes,
+                "\u{e8b7}",
+                "settings.sizes.title",
+                crate::i18n::tr("settings.sizes.description").into(),
+                Control::Toggle(4),
+            )?;
+            for (index, drive) in [Drive::Ssd, Drive::Hdd, Drive::Network]
+                .into_iter()
+                .enumerate()
+            {
+                let (title, description, icon) = size_labels(drive);
+                self.add_row(
+                    &mut top,
+                    text,
+                    Target::FolderSizeDrive(drive),
+                    icon,
+                    title,
+                    crate::i18n::tr(description).into(),
+                    Control::Toggle(5 + index),
+                )?;
+            }
+            self.notice(&mut top, text, self.folder_sizes_error.clone())?;
+            top += 22.0;
             self.group(&mut top, "settings.group.system");
             self.add_row(
                 &mut top,
@@ -389,9 +417,28 @@ impl State {
                         *target != Target::ExplorerHost || self.host_available || self.host_enabled
                     })
                     .filter(|target| !matches!(target, Target::Zoxide(_)) || self.zoxide.available)
-                    .filter(|target| *target != Target::ZoxideInstall || self.install_enabled()),
+                    .filter(|target| *target != Target::ZoxideInstall || self.install_enabled())
+                    .filter(|target| self.available(*target)),
             )
             .collect()
+    }
+
+    fn available(&self, target: Target) -> bool {
+        !matches!(target, Target::FolderSizeDrive(_)) || self.folder_sizes.enabled
+    }
+
+    pub(super) fn toggle_state(&self, index: usize) -> (bool, bool) {
+        let sizes = self.folder_sizes;
+        match index {
+            0 => (self.enabled, true),
+            1 => (self.zoxide.enabled, self.zoxide.available),
+            2 => (self.zoxide.record, self.zoxide.available),
+            3 => (self.host_enabled, self.host_available || self.host_enabled),
+            4 => (sizes.enabled, true),
+            5 => (sizes.drives.ssd, sizes.enabled),
+            6 => (sizes.drives.hdd, sizes.enabled),
+            _ => (sizes.drives.network, sizes.enabled),
+        }
     }
 }
 
@@ -592,17 +639,7 @@ pub fn draw(
             let control = state.bounds(row.target);
             match row.control {
                 Control::Toggle(index) => {
-                    let on = match index {
-                        0 => state.enabled,
-                        1 => state.zoxide.enabled,
-                        3 => state.host_enabled,
-                        _ => state.zoxide.record,
-                    };
-                    let available = match index {
-                        0 => true,
-                        3 => state.host_available || state.host_enabled,
-                        _ => state.zoxide.available,
-                    };
+                    let (on, available) = state.toggle_state(index);
                     let caption = crate::i18n::tr(if on {
                         "settings.state.on"
                     } else {
@@ -808,6 +845,34 @@ mod tests {
                 )),
                 Some(Target::ExplorerHost)
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn drive_toggles_only_respond_while_folder_sizes_are_enabled() -> Result<()> {
+        let mut text = TextEngine::new(96)?;
+        for width in [400.0, 640.0, 1100.0] {
+            let mut state = State::default();
+            state.layout((width, 2000.0), &mut text)?;
+            let drives = [Drive::Ssd, Drive::Hdd, Drive::Network].map(Target::FolderSizeDrive);
+            let center = |state: &State, target| {
+                let r = state.bounds(target);
+                ((r.left + r.right) / 2.0, (r.top + r.bottom) / 2.0 + 88.0)
+            };
+            assert!(state.controls().contains(&Target::FolderSizes));
+            for target in drives {
+                assert!(!state.controls().contains(&target));
+                assert_eq!(state.hit(center(&state, target)), None);
+                assert!(!state.toggle_state(5).1);
+            }
+            state.folder_sizes.enabled = true;
+            for target in drives {
+                assert!(state.controls().contains(&target));
+                assert_eq!(state.hit(center(&state, target)), Some(target));
+            }
+            assert_eq!(state.toggle_state(5), (true, true));
+            assert_eq!(state.toggle_state(6), (false, true));
         }
         Ok(())
     }

@@ -171,7 +171,7 @@ pub fn order(
         } else {
             match sort.key {
                 SortKey::Name => by_name(),
-                SortKey::Size => a.size.cmp(&b.size),
+                SortKey::Size => a.sort_size().cmp(&b.sort_size()),
                 SortKey::Modified => compare_time_ms(a.modified, b.modified),
                 SortKey::Created => compare_time_ms(a.created, b.created),
                 SortKey::Type => compare_wide(&texts[ia], &texts[ib]),
@@ -189,7 +189,7 @@ pub fn order(
                     SortKey::Name => by_name(),
                     SortKey::Modified => compare_time_ms(a.modified, b.modified),
                     SortKey::Created => compare_time_ms(a.created, b.created),
-                    SortKey::Size => a.size.cmp(&b.size),
+                    SortKey::Size => a.sort_size().cmp(&b.sort_size()),
                     SortKey::Type => compare_names(&a.type_name, &b.type_name),
                     SortKey::Authors | SortKey::Tags | SortKey::Title | SortKey::Prop(_) => {
                         let (va, vb) = (value(slot + 1, a), value(slot + 1, b));
@@ -230,18 +230,9 @@ fn compare_time_ms(a: u64, b: u64) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn type_sort_keeps_folders_first_and_reverses_name_ties() {
-        let entries = [
-            ("z-folder", "Folder", true),
-            ("a-folder", "Folder", true),
-            ("a-zulu", "Zulu", false),
-            ("z-zulu", "Zulu", false),
-            ("a-alpha", "Alpha", false),
-            ("z-alpha", "Alpha", false),
-        ]
-        .into_iter()
-        .map(|(name, type_name, is_dir)| ShellEntry {
+
+    fn entry(name: &str, type_name: &str, is_dir: bool) -> ShellEntry {
+        ShellEntry {
             name: name.into(),
             path: name.into(),
             is_dir,
@@ -265,7 +256,61 @@ mod tests {
             can_delete: false,
             child: Vec::new(),
             absolute: Vec::new(),
-        })
+            folder_size: None,
+        }
+    }
+
+    #[test]
+    fn size_sort_orders_folders_by_calculated_size_as_one_group() {
+        let mut entries = vec![
+            entry("small", "Folder", true),
+            entry("unknown", "Folder", true),
+            entry("large", "Folder", true),
+            entry("file", "Text", false),
+        ];
+        entries[0].folder_size = Some(crate::shell::folder_size::FolderSize {
+            bytes: 10,
+            complete: true,
+        });
+        entries[2].folder_size = Some(crate::shell::folder_size::FolderSize {
+            bytes: 5_000,
+            complete: false,
+        });
+        entries[3].size = 1_000_000;
+        let mut indices = (0..entries.len()).collect::<Vec<_>>();
+        order(
+            &entries,
+            &mut indices,
+            Sort {
+                key: SortKey::Size,
+                descending: true,
+            },
+            &[],
+            &[],
+            true,
+            false,
+        );
+        assert_eq!(
+            indices
+                .iter()
+                .map(|&i| entries[i].name.as_str())
+                .collect::<Vec<_>>(),
+            ["file", "large", "small", "unknown"]
+        );
+    }
+
+    #[test]
+    fn type_sort_keeps_folders_first_and_reverses_name_ties() {
+        let entries = [
+            ("z-folder", "Folder", true),
+            ("a-folder", "Folder", true),
+            ("a-zulu", "Zulu", false),
+            ("z-zulu", "Zulu", false),
+            ("a-alpha", "Alpha", false),
+            ("z-alpha", "Alpha", false),
+        ]
+        .into_iter()
+        .map(|(name, type_name, is_dir)| entry(name, type_name, is_dir))
         .collect::<Vec<_>>();
         let mut indices = (0..entries.len()).collect::<Vec<_>>();
         order(

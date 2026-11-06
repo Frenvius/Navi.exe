@@ -564,6 +564,36 @@ msgstr "Inicialização"
 msgid "settings.group.opening"
 msgstr "Abertura de pastas"
 
+msgid "settings.group.folders"
+msgstr "Pastas"
+
+msgid "settings.sizes.title"
+msgstr "Calcular o tamanho das pastas"
+
+msgid "settings.sizes.description"
+msgstr "Calcula o tamanho das pastas varrendo o conteúdo delas em segundo plano."
+
+msgid "settings.sizes.ssd.title"
+msgstr "SSDs"
+
+msgid "settings.sizes.ssd.description"
+msgstr "Calcula o tamanho das pastas em unidades SSD locais."
+
+msgid "settings.sizes.hdd.title"
+msgstr "HDDs"
+
+msgid "settings.sizes.hdd.description"
+msgstr "Calcula o tamanho das pastas em discos rígidos (HDD) locais."
+
+msgid "settings.sizes.network.title"
+msgstr "Locais de rede"
+
+msgid "settings.sizes.network.description"
+msgstr "Calcula o tamanho das pastas em unidades de rede e locais compartilhados."
+
+msgid "settings.sizes.error"
+msgstr "Não foi possível ler ou salvar as preferências de tamanho das pastas: {}"
+
 msgid "settings.group.system"
 msgstr "Sistema"
 

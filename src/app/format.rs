@@ -70,6 +70,14 @@ pub fn short_size(bytes: u64) -> String {
     }
 }
 
+pub fn folder_size(size: crate::shell::folder_size::FolderSize) -> String {
+    if size.complete {
+        short_size(size.bytes)
+    } else {
+        format!("\u{2265} {}", short_size(size.bytes))
+    }
+}
+
 /// "1 item", "1.500 itens" (`one` and `many` are keys: "count.item", "count.items").
 pub fn count(n: usize, one: &str, many: &str) -> String {
     format!(

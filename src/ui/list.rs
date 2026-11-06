@@ -324,9 +324,14 @@ enum Request {
         f32,
     ),
     Save(String, shell::viewstate::ViewState),
+    FolderSizes,
+    FolderSizePreferences,
 }
 
+type SizeOrder = (Arc<Vec<usize>>, Arc<Vec<String>>);
+
 enum Update {
+    Sizes(u64, Arc<Vec<ShellEntry>>, Option<SizeOrder>, Vec<Row>),
     FilterMenu(u64, sort::SortKey, Vec<String>),
     Pane(u64, Arc<crate::app::pane_model::Model>),
     SearchBatch(u64, Arc<Folder>, (usize, usize)),
@@ -488,6 +493,20 @@ impl Job {
             .collect();
         let mut items = shell::columns::Items::new(&path, children);
         let mut icons = RowIcons::default();
+        let mut sizes = Sizes::new(watched_requests.clone());
+        let initial_sizes = sizes.want(&mut folder, &(0..SIZE_ROWS));
+        if let Some(update) = size_update(
+            &mut folder,
+            initial_sizes,
+            SizeScope {
+                items: &items,
+                icons: &mut icons,
+                generation: 0,
+                visible: &(0..SIZE_ROWS),
+            },
+        ) {
+            send(update);
+        }
         let mut generation = 0;
         let mut counts = (usize::from(!cached), 0);
         let mut queue = std::collections::VecDeque::new();
@@ -535,12 +554,14 @@ impl Job {
         loop {
             let request = if let Some(request) = queue.pop_front() {
                 request
-            } else if renames.waiting() || retries.wait().is_some() {
+            } else if renames.waiting() || retries.wait().is_some() || sizes.due.is_some() {
                 let wait = retries.wait().unwrap_or(std::time::Duration::MAX);
                 let wait = if renames.waiting() {
                     wait.min(std::time::Duration::from_millis(50))
                 } else {
-                    wait
+                    sizes.due.map_or(wait, |due| {
+                        wait.min(due.saturating_duration_since(std::time::Instant::now()))
+                    })
                 };
                 match requests_rx.recv_timeout(wait) {
                     Ok(request) => request,
@@ -551,6 +572,13 @@ impl Job {
                         let due = retries.due();
                         if !due.is_empty() {
                             queue.push_back(Request::Retry(generation, due));
+                        }
+                        if sizes
+                            .due
+                            .is_some_and(|due| due <= std::time::Instant::now())
+                        {
+                            sizes.due = None;
+                            queue.push_back(Request::FolderSizes);
                         }
                         continue;
                     }
@@ -709,6 +737,41 @@ impl Job {
                 Request::Viewport(range) => {
                     picture_range = range.clone();
                     retries.retain(range);
+                    let changed = sizes.want(&mut folder, &picture_range);
+                    if let Some(update) = size_update(
+                        &mut folder,
+                        changed,
+                        SizeScope {
+                            items: &items,
+                            icons: &mut icons,
+                            generation,
+                            visible: &picture_range,
+                        },
+                    ) {
+                        send(update);
+                    }
+                }
+                Request::FolderSizes | Request::FolderSizePreferences => {
+                    let changed = if matches!(request, Request::FolderSizes) {
+                        if sizes.throttled() {
+                            continue;
+                        }
+                        sizes.take(&mut folder)
+                    } else {
+                        sizes.want(&mut folder, &picture_range)
+                    };
+                    if let Some(update) = size_update(
+                        &mut folder,
+                        changed,
+                        SizeScope {
+                            items: &items,
+                            icons: &mut icons,
+                            generation,
+                            visible: &picture_range,
+                        },
+                    ) {
+                        send(update);
+                    }
                 }
                 Request::Extract(epoch, indices) => {
                     if epoch == generation {
@@ -962,13 +1025,17 @@ impl Job {
                         }
                         let name = changed_path.to_string_lossy();
                         counts.1 += 1;
+                        shell::folder_size::invalidate(&name);
                         match shell::listing::read_file(&name) {
                             Ok(entry) => {
                                 let existing = entries
                                     .iter()
                                     .position(|entry| crate::app::ids::same(&entry.path, &name));
                                 match (existing, entry) {
-                                    (Some(index), Some(entry)) => entries[index] = entry,
+                                    (Some(index), Some(mut entry)) => {
+                                        entry.folder_size = entries[index].folder_size;
+                                        entries[index] = entry;
+                                    }
                                     (Some(index), None) => {
                                         entries.remove(index);
                                     }
@@ -983,6 +1050,8 @@ impl Job {
                     }
                     folder.entries = Arc::new(entries);
                     icons.clear();
+                    sizes.reset();
+                    sizes.want(&mut folder, &picture_range);
                     let order = sort::updated_order(&previous, &folder.entries, &renames);
                     group_order(&mut folder, &items, order);
                     let range =
@@ -1038,6 +1107,7 @@ impl Job {
                             updated.home = folder.home;
                             updated.gallery_filter = folder.gallery_filter.clone();
                             updated.rebuild_layout();
+                            carry_sizes(&folder.entries, &mut updated.entries);
                             folder = updated;
                             let children = folder
                                 .entries
@@ -1046,6 +1116,8 @@ impl Job {
                                 .map(|entry| (entry.path.clone(), entry.child.clone()))
                                 .collect();
                             items = shell::columns::Items::new(&path, children);
+                            sizes.reset();
+                            sizes.want(&mut folder, &picture_range);
                             arrange(&mut folder, &items);
                             icons.clear();
                             let range = reveal_range(&folder, range, reveal);
@@ -1068,6 +1140,7 @@ impl Job {
                     folder.view.sort = primary;
                     folder.view.extra_sorts.clear();
                     folder.view.search_ranked = false;
+                    let changed = sizes.want(&mut folder, &picture_range);
                     arrange(&mut folder, &items);
                     let range = reveal_range(&folder, range, reveal);
                     let rows = ready_rows(&folder, range.collect(), &items, &mut icons);
@@ -1078,6 +1151,14 @@ impl Job {
                         folder.headers.clone(),
                         rows,
                     ));
+                    if !changed.is_empty() {
+                        send(Update::Sizes(
+                            epoch,
+                            folder.entries.clone(),
+                            None,
+                            Vec::new(),
+                        ));
+                    }
                 }
                 Request::Group(epoch, group, range, reveal) => {
                     generation = epoch;
@@ -1118,6 +1199,7 @@ impl Job {
                     generation = epoch;
                     folder.view.columns = cols.iter().map(|col| (col.key, col.width)).collect();
                     folder.columns = cols;
+                    let changed = sizes.want(&mut folder, &picture_range);
                     let range = reveal_range(&folder, range, reveal);
                     send(Update::Order(
                         epoch,
@@ -1125,6 +1207,14 @@ impl Job {
                         folder.headers.clone(),
                         ready_rows(&folder, range.collect(), &items, &mut icons),
                     ));
+                    if !changed.is_empty() {
+                        send(Update::Sizes(
+                            epoch,
+                            folder.entries.clone(),
+                            None,
+                            Vec::new(),
+                        ));
+                    }
                 }
                 Request::Fit(epoch, cols, range, indices, indent) if epoch == generation => {
                     let keys = cols
@@ -1470,6 +1560,10 @@ impl List {
 
     pub fn toggle(&self, option: shell::listing::FolderOption) -> Result<(), String> {
         self.send(Request::Toggle(option))
+    }
+
+    pub fn folder_sizes_changed(&self) -> Result<(), String> {
+        self.send(Request::FolderSizePreferences)
     }
 
     pub fn set_group(
@@ -1977,6 +2071,21 @@ impl List {
                     continue;
                 }
                 Update::Rows(epoch, rows) if epoch == self.generation => rows,
+                Update::Sizes(epoch, entries, order, rows) if epoch == self.generation => {
+                    let Some(folder) = self.folder.as_mut() else {
+                        continue;
+                    };
+                    let folder = Arc::make_mut(folder);
+                    folder.entries = entries;
+                    if let Some((order, headers)) = order {
+                        folder.order = order;
+                        folder.headers = headers;
+                        folder.rebuild_layout();
+                        self.relayout(scroll, ViewChange::Stable);
+                        changed = Some(0..self.folder.as_ref().map_or(0, |f| f.order.len()));
+                    }
+                    rows
+                }
                 Update::Order(epoch, order, headers, rows) if epoch == self.generation => {
                     if let Some(folder) = self.folder.as_mut() {
                         let folder = Arc::make_mut(folder);
@@ -3398,6 +3507,228 @@ fn load(path: &str, session: Option<crate::app::view::ResolvedView>) -> Result<F
         );
     }
     Ok(folder)
+}
+
+const SIZE_BATCH: std::time::Duration = std::time::Duration::from_millis(150);
+const SIZE_MARGIN: usize = 16;
+const SIZE_ROWS: usize = 256;
+
+struct Sizes {
+    client: shell::folder_size::Client,
+    wanted: Option<Vec<String>>,
+    drives: Option<shell::folder_size::Drives>,
+    applied: Option<std::time::Instant>,
+    due: Option<std::time::Instant>,
+}
+
+impl Sizes {
+    fn new(requests: mpsc::Sender<Request>) -> Self {
+        Self {
+            client: shell::folder_size::Client::new(move || {
+                if let Err(error) = requests.send(Request::FolderSizes) {
+                    eprintln!("folder size request: {error}");
+                }
+            }),
+            wanted: None,
+            drives: None,
+            applied: None,
+            due: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.wanted = None;
+    }
+
+    fn want(&mut self, folder: &mut Folder, visible: &std::ops::Range<usize>) -> Vec<usize> {
+        let drives = crate::app::folder_size::current().active();
+        let mut changed = Vec::new();
+        if self.drives != Some(drives) {
+            self.drives = Some(drives);
+            self.wanted = None;
+            changed = clear_sizes(folder);
+        }
+        let targets = if drives.any() {
+            size_targets(folder, visible)
+        } else {
+            Vec::new()
+        };
+        if self.wanted.as_ref() != Some(&targets) {
+            let ready = self.client.want(targets.clone(), drives);
+            self.wanted = Some(targets);
+            changed.extend(apply_sizes(folder, ready));
+        }
+        changed
+    }
+
+    fn throttled(&mut self) -> bool {
+        let Some(next) = self.applied.map(|applied| applied + SIZE_BATCH) else {
+            return false;
+        };
+        if std::time::Instant::now() >= next {
+            return false;
+        }
+        self.due = Some(next);
+        true
+    }
+
+    fn take(&mut self, folder: &mut Folder) -> Vec<usize> {
+        self.applied = Some(std::time::Instant::now());
+        self.due = None;
+        apply_sizes(folder, self.client.take())
+    }
+}
+
+fn sorted_by_size(folder: &Folder) -> bool {
+    std::iter::once(&folder.view.sort)
+        .chain(&folder.view.extra_sorts)
+        .any(|sort| sort.key == sort::SortKey::Size)
+}
+
+fn size_targets(folder: &Folder, visible: &std::ops::Range<usize>) -> Vec<String> {
+    let by_size = sorted_by_size(folder);
+    let shown = folder.view.mode == 6
+        && folder
+            .columns
+            .iter()
+            .any(|column| column.key == windows::Win32::Storage::EnhancedStorage::PKEY_Size);
+    let excluded = folder.is_home()
+        || folder
+            .crumbs
+            .last()
+            .is_some_and(|crumb| crate::app::ids::same(&crumb.id, crate::app::ids::THIS_PC));
+    if excluded || !(by_size || shown) {
+        return Vec::new();
+    }
+    let eligible = |index: &usize| {
+        let entry = &folder.entries[*index];
+        entry.is_dir && entry.is_fs && !entry.is_link && shell::folder_size::scannable(&entry.path)
+    };
+    let length = folder.order.len();
+    let start = visible.start.saturating_sub(SIZE_MARGIN).min(length);
+    let end = visible
+        .end
+        .min(visible.start.saturating_add(SIZE_ROWS))
+        .saturating_add(SIZE_MARGIN)
+        .clamp(start, length);
+    let mut targets = folder.order[start..end]
+        .iter()
+        .copied()
+        .filter(eligible)
+        .collect::<Vec<_>>();
+    if by_size {
+        let near = targets.iter().copied().collect::<HashSet<_>>();
+        targets.extend(
+            (0..folder.entries.len())
+                .filter(|index| !near.contains(index))
+                .filter(eligible),
+        );
+    }
+    targets
+        .into_iter()
+        .map(|index| folder.entries[index].path.clone())
+        .collect()
+}
+
+fn apply_sizes(
+    folder: &mut Folder,
+    sizes: Vec<(String, shell::folder_size::FolderSize)>,
+) -> Vec<usize> {
+    if sizes.is_empty() {
+        return Vec::new();
+    }
+    let sizes = sizes.into_iter().collect::<HashMap<_, _>>();
+    let changed = folder
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry.is_dir
+                && sizes
+                    .get(&entry.path)
+                    .is_some_and(|size| entry.folder_size != Some(*size))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if !changed.is_empty() {
+        let entries = Arc::make_mut(&mut folder.entries);
+        for &index in &changed {
+            entries[index].folder_size = sizes.get(&entries[index].path).copied();
+        }
+    }
+    changed
+}
+
+fn clear_sizes(folder: &mut Folder) -> Vec<usize> {
+    let changed = folder
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.folder_size.is_some())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if !changed.is_empty() {
+        let entries = Arc::make_mut(&mut folder.entries);
+        for &index in &changed {
+            entries[index].folder_size = None;
+        }
+    }
+    changed
+}
+
+fn carry_sizes(previous: &[ShellEntry], entries: &mut Arc<Vec<ShellEntry>>) {
+    let sizes = previous
+        .iter()
+        .filter_map(|entry| Some((entry.path.as_str(), entry.folder_size?)))
+        .collect::<HashMap<_, _>>();
+    if sizes.is_empty() {
+        return;
+    }
+    for entry in Arc::make_mut(entries) {
+        if entry.is_dir && entry.folder_size.is_none() {
+            entry.folder_size = sizes.get(entry.path.as_str()).copied();
+        }
+    }
+}
+
+struct SizeScope<'a> {
+    items: &'a shell::columns::Items,
+    icons: &'a mut RowIcons,
+    generation: u64,
+    visible: &'a std::ops::Range<usize>,
+}
+
+fn size_update(folder: &mut Folder, changed: Vec<usize>, scope: SizeScope) -> Option<Update> {
+    if changed.is_empty() {
+        return None;
+    }
+    let previous = folder.order.clone();
+    if sorted_by_size(folder) {
+        arrange(folder, scope.items);
+    }
+    let reordered = folder.order != previous;
+    let length = folder.order.len();
+    let start = scope.visible.start.min(length);
+    let end = scope
+        .visible
+        .end
+        .min(start.saturating_add(SIZE_ROWS))
+        .clamp(start, length);
+    let indices = if reordered {
+        (start..end).collect()
+    } else {
+        let changed = changed.into_iter().collect::<HashSet<_>>();
+        (start..end)
+            .filter(|&row| changed.contains(&folder.order[row]))
+            .collect()
+    };
+    let rows = ready_rows(folder, indices, scope.items, scope.icons);
+    Some(Update::Sizes(
+        scope.generation,
+        folder.entries.clone(),
+        reordered.then(|| (folder.order.clone(), folder.headers.clone())),
+        rows,
+    ))
 }
 
 fn arrange(folder: &mut Folder, items: &shell::columns::Items) {

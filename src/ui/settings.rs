@@ -6,9 +6,11 @@ use super::{
     theme::Theme,
     WINDOW,
 };
+use crate::app::folder_size::Preferences as SizePreferences;
 use crate::app::launch_preferences::{Destination, Preferences, Source, Startup};
 use crate::app::zoxide::{Preferences as ZoxidePreferences, Setting as ZoxideSetting};
 use crate::app::zoxide_install::{self, Failure as InstallFailure, State as InstallState};
+use crate::shell::folder_size::Drive;
 use windows::{
     core::Result,
     Win32::{Foundation::HWND, Graphics::Direct2D::Common::*},
@@ -58,6 +60,8 @@ pub enum Target {
     ExpandZoxide,
     Zoxide(ZoxideSetting),
     ZoxideInstall,
+    FolderSizes,
+    FolderSizeDrive(Drive),
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +98,8 @@ pub struct State {
     opening_error: String,
     startup: Startup,
     startup_error: String,
+    folder_sizes: SizePreferences,
+    folder_sizes_error: String,
     zoxide: ZoxidePreferences,
     zoxide_error: String,
     zoxide_install: InstallState,
@@ -112,7 +118,7 @@ pub struct State {
     rows: Vec<Row>,
     groups: Vec<(f32, &'static str)>,
     notices: Vec<(D2D_RECT_F, String)>,
-    toggles: [super::toggle::Motion; 4],
+    toggles: [super::toggle::Motion; 8],
 }
 
 impl State {
@@ -180,6 +186,26 @@ fn zoxide_labels(setting: ZoxideSetting) -> (&'static str, &'static str) {
         ZoxideSetting::Record => (
             "settings.zoxide.record.title",
             "settings.zoxide.record.description",
+        ),
+    }
+}
+
+fn size_labels(drive: Drive) -> (&'static str, &'static str, &'static str) {
+    match drive {
+        Drive::Ssd => (
+            "settings.sizes.ssd.title",
+            "settings.sizes.ssd.description",
+            "\u{eda2}",
+        ),
+        Drive::Hdd => (
+            "settings.sizes.hdd.title",
+            "settings.sizes.hdd.description",
+            "\u{eda2}",
+        ),
+        Drive::Network => (
+            "settings.sizes.network.title",
+            "settings.sizes.network.description",
+            "\u{e968}",
         ),
     }
 }
@@ -253,6 +279,7 @@ pub fn refresh(hwnd: HWND) {
     let status = crate::app::default_manager::status();
     let opening = Preferences::read();
     let startup = Startup::read();
+    let folder_sizes = SizePreferences::read();
     let zoxide = ZoxidePreferences::read();
     let install = zoxide_install::state();
     let winget = zoxide_install::winget_available();
@@ -279,6 +306,7 @@ pub fn refresh(hwnd: HWND) {
             s.startup,
             s.startup_error.clone(),
         );
+        let sizes_before = (s.folder_sizes, s.folder_sizes_error.clone());
         s.host_enabled = host_enabled;
         s.host_available = host_available;
         if !s.loaded || s.zoxide_recheck {
@@ -325,24 +353,35 @@ pub fn refresh(hwnd: HWND) {
                 s.startup_error = crate::i18n::trf("settings.startup.error", &[&error.to_string()]);
             }
         }
+        match folder_sizes {
+            Ok(value) => {
+                s.folder_sizes = value;
+                s.folder_sizes_error.clear();
+            }
+            Err(error) => {
+                s.folder_sizes_error =
+                    crate::i18n::trf("settings.sizes.error", &[&error.to_string()]);
+            }
+        }
         if initial {
             s.motion(false);
         }
-        before
-            != (
-                s.host_enabled,
-                s.host_available,
-                s.enabled,
-                s.recovery,
-                s.error.clone(),
-                s.opening,
-                s.opening_error.clone(),
-                s.zoxide,
-                s.zoxide_install.clone(),
-                s.zoxide_winget,
-                s.startup,
-                s.startup_error.clone(),
-            )
+        sizes_before != (s.folder_sizes, s.folder_sizes_error.clone())
+            || before
+                != (
+                    s.host_enabled,
+                    s.host_available,
+                    s.enabled,
+                    s.recovery,
+                    s.error.clone(),
+                    s.opening,
+                    s.opening_error.clone(),
+                    s.zoxide,
+                    s.zoxide_install.clone(),
+                    s.zoxide_winget,
+                    s.startup,
+                    s.startup_error.clone(),
+                )
     });
     if let Some(enable) = detect.filter(|_| !zoxide.available) {
         WINDOW.with(|slot| {
@@ -577,6 +616,39 @@ fn activate(hwnd: HWND, target: Target) {
         super::invalidate_all(hwnd);
         return;
     }
+    if matches!(target, Target::FolderSizes | Target::FolderSizeDrive(_)) {
+        let drive = match target {
+            Target::FolderSizeDrive(drive) => Some(drive),
+            _ => None,
+        };
+        let current = crate::app::folder_size::current();
+        if drive.is_some() && !current.enabled {
+            return;
+        }
+        let result = current.toggled(drive).save();
+        for handle in super::context::handles() {
+            let _context = super::context::enter(handle);
+            let notified = WINDOW.with(|slot| {
+                slot.borrow()
+                    .as_ref()
+                    .map(|window| window.list.folder_sizes_changed())
+            });
+            if let Some(Err(error)) = notified {
+                eprintln!("folder size preferences: {error}");
+            }
+        }
+        refresh(hwnd);
+        WINDOW.with(|slot| {
+            if let Some(window) = slot.borrow_mut().as_mut() {
+                window.settings.folder_sizes_error = match result {
+                    Ok(()) => String::new(),
+                    Err(error) => crate::i18n::trf("settings.sizes.error", &[&error.to_string()]),
+                };
+            }
+        });
+        super::invalidate_all(hwnd);
+        return;
+    }
     if let Target::OpenIn(source, destination) = target {
         let result = source.save(destination);
         refresh(hwnd);
@@ -631,27 +703,20 @@ fn control_focus(hwnd: HWND, target: Target, cues: bool) {
 
 impl State {
     fn motion(&mut self, animate: bool) {
-        for (index, target, on, available) in [
-            (0, Target::Toggle, self.enabled, true),
-            (
-                3,
-                Target::ExplorerHost,
-                self.host_enabled,
-                self.host_available || self.host_enabled,
-            ),
-            (
-                1,
-                Target::Zoxide(ZoxideSetting::Integration),
-                self.zoxide.enabled,
-                self.zoxide.available,
-            ),
-            (
-                2,
-                Target::Zoxide(ZoxideSetting::Record),
-                self.zoxide.record,
-                self.zoxide.available,
-            ),
-        ] {
+        for (index, target) in [
+            Target::Toggle,
+            Target::Zoxide(ZoxideSetting::Integration),
+            Target::Zoxide(ZoxideSetting::Record),
+            Target::ExplorerHost,
+            Target::FolderSizes,
+            Target::FolderSizeDrive(Drive::Ssd),
+            Target::FolderSizeDrive(Drive::Hdd),
+            Target::FolderSizeDrive(Drive::Network),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (on, available) = self.toggle_state(index);
             self.toggles[index].target(
                 on,
                 available && self.hover == Some(target),

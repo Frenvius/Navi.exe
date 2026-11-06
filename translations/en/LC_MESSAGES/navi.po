@@ -586,6 +586,36 @@ msgstr "Startup"
 msgid "settings.group.opening"
 msgstr "Opening folders"
 
+msgid "settings.group.folders"
+msgstr "Folders"
+
+msgid "settings.sizes.title"
+msgstr "Calculate folder sizes"
+
+msgid "settings.sizes.description"
+msgstr "Calculates folder sizes by scanning their contents in the background."
+
+msgid "settings.sizes.ssd.title"
+msgstr "SSDs"
+
+msgid "settings.sizes.ssd.description"
+msgstr "Calculate folder sizes on local SSD drives."
+
+msgid "settings.sizes.hdd.title"
+msgstr "HDDs"
+
+msgid "settings.sizes.hdd.description"
+msgstr "Calculate folder sizes on local HDD drives."
+
+msgid "settings.sizes.network.title"
+msgstr "Network locations"
+
+msgid "settings.sizes.network.description"
+msgstr "Calculate folder sizes on network drives and shared locations."
+
+msgid "settings.sizes.error"
+msgstr "Could not read or save the folder size preferences: {}"
+
 msgid "settings.group.system"
 msgstr "System"
 

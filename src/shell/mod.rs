@@ -7,6 +7,7 @@ pub mod cloud;
 pub mod columns;
 pub mod extmenu;
 pub mod folder_options;
+pub mod folder_size;
 pub mod gallery;
 pub mod home;
 pub mod http;

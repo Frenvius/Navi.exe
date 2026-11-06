@@ -141,7 +141,9 @@ pub fn cell_text(
     } else if *k == PKEY_ItemTypeText {
         e.type_name.clone()
     } else if *k == PKEY_Size {
-        if e.is_dir || (!e.is_fs && crate::shell::archive::root(&e.path).is_none()) {
+        if e.is_dir {
+            e.folder_size.map(format::folder_size).unwrap_or_default()
+        } else if !e.is_fs && crate::shell::archive::root(&e.path).is_none() {
             String::new()
         } else {
             format::size_kb(e.size)

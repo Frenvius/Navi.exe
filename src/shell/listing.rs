@@ -42,6 +42,17 @@ pub struct ShellEntry {
     pub can_delete: bool,
     pub child: Vec<u8>,
     pub absolute: Vec<u8>,
+    pub folder_size: Option<super::folder_size::FolderSize>,
+}
+
+impl ShellEntry {
+    pub fn sort_size(&self) -> u64 {
+        if self.is_dir {
+            self.folder_size.map_or(0, |size| size.bytes)
+        } else {
+            self.size
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -770,6 +781,7 @@ impl EntryReader<'_> {
             .unwrap_or(0);
 
         let entry = ShellEntry {
+            folder_size: None,
             photo: if self
                 .parent_path
                 .to_ascii_lowercase()
