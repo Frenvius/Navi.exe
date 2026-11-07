@@ -449,6 +449,21 @@ pub fn released() {
     });
 }
 
+fn join_dispatching(worker: std::thread::JoinHandle<()>) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::System::Com::{CoWaitForMultipleHandles, COWAIT_DISPATCH_CALLS};
+    use windows::Win32::System::Threading::INFINITE;
+    let handle = HANDLE(worker.as_raw_handle());
+    if let Err(error) =
+        unsafe { CoWaitForMultipleHandles(COWAIT_DISPATCH_CALLS.0 as u32, INFINITE, &[handle]) }
+    {
+        eprintln!("drag worker wait: {error}");
+    }
+    if worker.join().is_err() {
+        eprintln!("drag worker panicked");
+    }
+}
+
 pub fn finished(hwnd: HWND, effect: DROPEFFECT) {
     let worker = WINDOW.with(|slot| {
         slot.borrow_mut().as_mut().and_then(|window| {
@@ -457,9 +472,7 @@ pub fn finished(hwnd: HWND, effect: DROPEFFECT) {
         })
     });
     if let Some(worker) = worker {
-        if worker.join().is_err() {
-            eprintln!("drag worker panicked");
-        }
+        join_dispatching(worker);
     }
     super::input::cancel(hwnd);
     super::input::leave(hwnd);
