@@ -1050,10 +1050,14 @@ impl Job {
                     }
                     folder.entries = Arc::new(entries);
                     icons.clear();
-                    sizes.reset();
-                    sizes.want(&mut folder, &picture_range);
                     let order = sort::updated_order(&previous, &folder.entries, &renames);
                     group_order(&mut folder, &items, order);
+                    sizes.reset();
+                    if !sizes.want(&mut folder, &picture_range).is_empty()
+                        && sorted_by_size(&folder)
+                    {
+                        arrange(&mut folder, &items);
+                    }
                     let range =
                         range.start.min(folder.order.len())..range.end.min(folder.order.len());
                     let rows = ready_rows(&folder, range.collect(), &items, &mut icons);
