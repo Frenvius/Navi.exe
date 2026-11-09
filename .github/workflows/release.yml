@@ -64,6 +64,11 @@ jobs:
             installer\navi.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      - name: Package symbols
+        run: |
+          Compress-Archive -Path target\release\*.pdb `
+            -DestinationPath "dist\Navi-Symbols-${{ needs.check.outputs.version }}.zip"
+
       - name: Checksums
         run: |
           Set-Location dist

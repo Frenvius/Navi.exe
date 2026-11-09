@@ -1,6 +1,6 @@
 [package]
 name = "navi"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/Frenvius/Navi.exe"
@@ -66,6 +66,7 @@ windows = { version = "0.61", features = [
   "Win32_System_SystemInformation",
   "Win32_System_Memory",
   "Win32_System_Diagnostics_Debug",
+  "Win32_System_Kernel",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_ProcessStatus",
   "Win32_System_Time",
@@ -83,6 +84,9 @@ windows = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Input_Ime",
 ] }
+
+[profile.release]
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2

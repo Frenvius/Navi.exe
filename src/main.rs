@@ -11,6 +11,7 @@ mod watch;
 use navi::explorer_host;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    navi::crash::install();
     if std::env::args_os().skip(1).eq([std::ffi::OsString::from(
         explorer_host::install::RECOVER_ARGUMENT,
     )]) {
