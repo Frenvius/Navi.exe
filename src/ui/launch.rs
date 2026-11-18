@@ -66,11 +66,18 @@ fn host_settle(hwnd: HWND) {
             super::shell_windows::sync(hwnd);
             if unpublished {
                 let launch = entry::Launch {
-                    mode: entry::Mode::NewWindow,
+                    mode: if pending.request.new_tab {
+                        entry::Mode::NewTab
+                    } else {
+                        entry::Mode::NewWindow
+                    },
+                    path: Some(pending.request.path.clone()),
+                    host_bootstrap: true,
                     ..Default::default()
                 };
-                if let Err(error) = super::session::start(hwnd, &launch) {
-                    eprintln!("Explorer host session: {error}");
+                match super::session::start(hwnd, &launch) {
+                    Ok(others) => super::restore_windows(others),
+                    Err(error) => eprintln!("Explorer host session: {error}"),
                 }
             }
             super::session::checkpoint(hwnd);

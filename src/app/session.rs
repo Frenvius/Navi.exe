@@ -52,10 +52,7 @@ pub fn enabled() -> Result<bool, String> {
 }
 
 fn automatic(launch: &super::entry::Launch) -> bool {
-    (launch.startup || launch.mode == super::entry::Mode::Default)
-        && launch.path.is_none()
-        && launch.select.is_none()
-        && launch.restore.is_none()
+    launch.restore.is_none()
 }
 struct Lock(HANDLE);
 impl Lock {
@@ -113,7 +110,7 @@ fn decode(text: &str) -> Option<Record> {
         || w.active >= w.paths.len()
         || w.paths
             .iter()
-            .any(|p| p.is_empty() || p.len() > 32768 || p.contains('\0'))
+            .any(|p| p.len() > 32768 || p.contains('\0'))
         || w.bounds[2] < 200
         || w.bounds[3] < 100
         || w.bounds[2] > 32768
@@ -192,6 +189,41 @@ impl Window {
         };
         unsafe { SetWindowPlacement(hwnd, &placement) }.map_err(|error| error.to_string())
     }
+
+    pub fn with_launch(mut self, launch: &super::entry::Launch) -> Self {
+        if launch.restore.is_some() {
+            return self;
+        }
+        let Some(path) = launch
+            .path
+            .as_ref()
+            .filter(|path| path.len() <= 32768 && !path.contains('\0'))
+        else {
+            return self;
+        };
+        if launch.mode == super::entry::Mode::Reuse {
+            if let Some(index) = self
+                .paths
+                .iter()
+                .position(|candidate| super::entry::same(candidate, path))
+            {
+                self.active = index;
+                return self;
+            }
+        }
+        if self.paths.len() < 128 {
+            self.libraries.resize(self.paths.len(), None);
+            self.paths.push(path.clone());
+            self.libraries.push(None);
+            self.active = self.paths.len() - 1;
+        } else if let Some(slot) = self.paths.get_mut(self.active) {
+            *slot = path.clone();
+            if let Some(library) = self.libraries.get_mut(self.active) {
+                *library = None;
+            }
+        }
+        self
+    }
 }
 
 fn session_key() -> Result<RegKey, String> {
@@ -255,7 +287,7 @@ pub fn claim(
     };
     let restored = chosen.as_ref().map(|(id, record)| {
         tracker.id = id.clone();
-        record.window.clone()
+        record.window.clone().with_launch(launch)
     });
     if on {
         tracker.last = write(
@@ -411,24 +443,42 @@ mod tests {
     }
 
     #[test]
-    fn automatic_restore_preserves_startup_intent_after_broker_routing() {
+    fn automatic_restore_preserves_saved_tabs_when_opening_a_folder_cold() {
         use crate::app::entry::{Launch, Mode};
         assert!(automatic(&Launch::default()));
-        for mode in [Mode::NewTab, Mode::NewWindow] {
+        for mode in [Mode::Default, Mode::NewTab, Mode::NewWindow, Mode::Reuse] {
             let mut launch = Launch {
                 mode,
                 startup: true,
                 ..Default::default()
             };
             assert!(automatic(&launch));
+            assert_eq!(record().window.with_launch(&launch), record().window);
             launch.startup = false;
-            assert!(!automatic(&launch));
-            launch.startup = true;
             launch.path = Some(r"C:\Windows".into());
-            assert!(!automatic(&launch));
-            launch.path = None;
+            assert!(automatic(&launch));
+            let merged = record().window.with_launch(&launch);
+            assert_eq!(
+                merged.paths,
+                vec![
+                    r"C:\pasta com espaços\ação",
+                    ids::THIS_PC,
+                    "search|C:\\|nome",
+                    r"C:\Windows",
+                ]
+            );
+            assert_eq!(merged.active, 3);
+            assert_eq!(merged.libraries.len(), 4);
             launch.restore = Some("window-explicit".into());
             assert!(!automatic(&launch));
+            assert_eq!(record().window.with_launch(&launch), record().window);
         }
+        let reused = record().window.with_launch(&Launch {
+            mode: Mode::Reuse,
+            path: Some(r"c:\PASTA COM ESPAÇOS\AÇÃO\".into()),
+            ..Default::default()
+        });
+        assert_eq!(reused.paths, record().window.paths);
+        assert_eq!(reused.active, 0);
     }
 }

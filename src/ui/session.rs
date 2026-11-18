@@ -35,8 +35,30 @@ pub fn start(hwnd: HWND, launch: &crate::app::entry::Launch) -> Result<Vec<(Stri
         let claim =
             session::claim(launch, snapshot(hwnd, &window)?, hwnd.0 as usize).map_err(error)?;
         if let Some(saved) = claim.restored {
+            let active_library = saved
+                .libraries
+                .get(saved.active)
+                .cloned()
+                .flatten()
+                .filter(|context| {
+                    crate::shell::library::is_library(&context.library)
+                        && context.contains(&saved.paths[saved.active])
+                });
+            let keep_active = window.tabs.entries.len() == 1
+                && active_library.is_none()
+                && crate::app::entry::same(
+                    window.tabs.active().location.tab.path(),
+                    &saved.paths[saved.active],
+                );
+            let mut existing = keep_active.then(|| window.tabs.entries.pop()).flatten();
             let mut entries = Vec::with_capacity(saved.paths.len());
             for (index, path) in saved.paths.iter().enumerate() {
+                if index == saved.active {
+                    if let Some(tab) = existing.take() {
+                        entries.push(tab);
+                        continue;
+                    }
+                }
                 let mut tab = super::tabs::Saved::new(path);
                 tab.location.tab.libraries[0] = saved
                     .libraries
@@ -53,10 +75,14 @@ pub fn start(hwnd: HWND, launch: &crate::app::entry::Launch) -> Result<Vec<(Stri
                 entries,
                 current: saved.active,
             };
-            super::tabs::show(&mut window, hwnd)?;
-            saved.place(hwnd).map_err(error)?;
-            window.title.maximized =
-                unsafe { windows::Win32::UI::WindowsAndMessaging::IsZoomed(hwnd).as_bool() };
+            if !keep_active {
+                super::tabs::show(&mut window, hwnd)?;
+            }
+            if !launch.host_bootstrap {
+                saved.place(hwnd).map_err(error)?;
+                window.title.maximized =
+                    unsafe { windows::Win32::UI::WindowsAndMessaging::IsZoomed(hwnd).as_bool() };
+            }
         }
         window.journal = Some(claim.tracker);
         super::tabs::sync(&mut window, hwnd)?;

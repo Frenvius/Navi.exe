@@ -194,6 +194,25 @@ fn create_host_window(path: &str) -> Result<HWND> {
     create_window_with_launch(path, std::time::Instant::now(), &launch)
 }
 
+fn restore_windows(others: Vec<(String, crate::app::session::Window)>) {
+    for (id, snapshot) in others {
+        let launch = crate::app::entry::Launch {
+            restore: Some(id.clone()),
+            ..Default::default()
+        };
+        if let Err(error) = create_window_with_launch(
+            &snapshot.paths[snapshot.active],
+            std::time::Instant::now(),
+            &launch,
+        ) {
+            eprintln!("native restored window: {error}");
+            if let Err(error) = crate::app::session::release_claim(&id) {
+                eprintln!("release session claim: {error}");
+            }
+        }
+    }
+}
+
 fn create_window_with_launch(
     path: &str,
     started: std::time::Instant,
@@ -257,22 +276,7 @@ fn create_window_with_launch(
             Vec::new()
         }
     };
-    for (id, snapshot) in others {
-        let launch = crate::app::entry::Launch {
-            restore: Some(id.clone()),
-            ..Default::default()
-        };
-        if let Err(error) = create_window_with_launch(
-            &snapshot.paths[snapshot.active],
-            std::time::Instant::now(),
-            &launch,
-        ) {
-            eprintln!("native restored window: {error}");
-            if let Err(error) = crate::app::session::release_claim(&id) {
-                eprintln!("release session claim: {error}");
-            }
-        }
-    }
+    restore_windows(others);
     {
         let _context = context::enter(hwnd);
         WINDOW.with(|slot| {
