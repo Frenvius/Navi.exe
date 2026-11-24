@@ -616,6 +616,17 @@ unsafe extern "system" fn window_proc(
                 None => LIST_PENDING.with(|pending| pending.set(true)),
                 _ => {}
             }
+            let missing = WINDOW.with(|slot| {
+                slot.borrow_mut()
+                    .as_mut()
+                    .and_then(|window| window.list.missing.take())
+            });
+            if let Some(ancestor) = missing {
+                if let Err(error) = navigate(hwnd, Navigation::Relocate(ancestor)) {
+                    fail(error);
+                }
+                invalidate_all(hwnd);
+            }
             header::flush(hwnd);
             search::sync(hwnd);
             chrome::sync(hwnd);
@@ -2017,7 +2028,9 @@ fn loaded(hwnd: HWND) -> Result<()> {
 
 fn fail(error: windows::core::Error) {
     eprintln!("native UI: {error}");
-    eprintln!("{}", std::backtrace::Backtrace::capture());
+    if FAILURE.with(|failure| failure.borrow().is_none()) {
+        navi::crash::report_fatal(&format!("native UI: {error}"));
+    }
     FAILURE.with(|failure| *failure.borrow_mut() = Some(error));
     unsafe {
         PostQuitMessage(1);

@@ -344,7 +344,48 @@ enum Update {
     Order(u64, Arc<Vec<usize>>, Arc<Vec<String>>, Vec<Row>),
     Fit(u64, Vec<(usize, f32)>),
     SearchFinished(Result<(), String>),
+    Missing(String),
     Error(String),
+}
+
+fn watch_removal(path: &str, requests: mpsc::Sender<Request>) -> Option<notify::RecommendedWatcher> {
+    let folder = std::path::PathBuf::from(path);
+    let parent = folder.parent()?.to_str()?.to_owned();
+    let watched = path.to_owned();
+    crate::watch::listen(&[parent], move |event| {
+        let Ok(event) = event else {
+            return;
+        };
+        let affected = matches!(
+            event.kind,
+            notify::EventKind::Remove(_)
+                | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+        ) && event
+            .paths
+            .iter()
+            .any(|changed| crate::app::ids::same(&changed.to_string_lossy(), &watched));
+        if affected && !folder.is_dir() {
+            let _ = requests.send(Request::WatchError(format!("{watched}: folder removed")));
+        }
+    })
+    .inspect_err(|error| eprintln!("native folder removal watch: {error}"))
+    .ok()
+}
+
+fn existing_ancestor(path: &str) -> Option<String> {
+    let path = std::path::Path::new(path);
+    if !path.is_absolute() || path.try_exists().unwrap_or(true) {
+        return None;
+    }
+    let ancestor = path
+        .ancestors()
+        .skip(1)
+        .find(|ancestor| ancestor.is_dir())
+        .map_or_else(
+            || crate::app::ids::THIS_PC.to_owned(),
+            |ancestor| ancestor.display().to_string(),
+        );
+    Some(ancestor)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -435,7 +476,7 @@ impl Job {
             match initial.map_or_else(|| load(&path, session), |folder| Ok((*folder).clone())) {
                 Ok(folder) => folder,
                 Err(error) => {
-                    send(Update::Error(error));
+                    send(existing_ancestor(&path).map_or(Update::Error(error), Update::Missing));
                     return;
                 }
             };
@@ -485,6 +526,7 @@ impl Job {
         } else {
             None
         };
+        let _removal_watcher = watch_removal(&watch_path, watched_requests.clone());
         let children = folder
             .entries
             .iter()
@@ -896,7 +938,7 @@ impl Job {
                     }
                 }
                 Request::WatchError(error) => {
-                    send(Update::WatchError(error));
+                    send(existing_ancestor(&path).map_or(Update::WatchError(error), Update::Missing));
                 }
                 Request::Rows(epoch, mut indices) => {
                     if shell::icons::thumb_probe() {
@@ -1134,7 +1176,10 @@ impl Job {
                             ));
                         }
                         Err(error) => {
-                            send(Update::WatchError(error));
+                            send(
+                                existing_ancestor(&path)
+                                    .map_or(Update::WatchError(error), Update::Missing),
+                            );
                         }
                     }
                 }
@@ -1267,6 +1312,7 @@ pub struct List {
     pub cut: HashSet<String>,
     pub search: SearchState,
     pub pane_model: Option<(u64, Arc<crate::app::pane_model::Model>)>,
+    pub missing: Option<String>,
     pub enumerations: usize,
     pub entry_reads: usize,
     pub dirty: bool,
@@ -1360,6 +1406,7 @@ impl List {
         Ok(Self {
             _alive: alive,
             pane_model: None,
+            missing: None,
             search: search.clone(),
             navigation_width: 202.0,
             header: Default::default(),
@@ -1921,6 +1968,11 @@ impl List {
                 }
                 Update::WatchError(error) => {
                     eprintln!("native folder watcher: {error}");
+                    continue;
+                }
+                Update::Missing(ancestor) => {
+                    self.missing = Some(ancestor);
+                    changed.get_or_insert(0..0);
                     continue;
                 }
                 Update::Event(event) => {
@@ -2649,6 +2701,7 @@ mod tests {
             cut: Default::default(),
             search: Default::default(),
             pane_model: None,
+            missing: None,
             enumerations: 1,
             entry_reads: 0,
             dirty: false,
@@ -3030,6 +3083,7 @@ mod tests {
             cut: HashSet::new(),
             search: Default::default(),
             pane_model: None,
+            missing: None,
             enumerations: 1,
             entry_reads: 0,
             dirty: false,
@@ -3211,6 +3265,7 @@ mod tests {
             cut: HashSet::new(),
             search: Default::default(),
             pane_model: None,
+            missing: None,
             enumerations: 1,
             entry_reads: 0,
             dirty: true,

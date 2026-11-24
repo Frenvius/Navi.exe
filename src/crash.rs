@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::windows::io::AsRawHandle,
+    os::windows::io::{AsRawHandle, IntoRawHandle},
     panic::{self, PanicHookInfo},
     path::{Path, PathBuf},
     sync::{
@@ -14,6 +14,7 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HMODULE},
         System::{
+            Console::{GetStdHandle, SetStdHandle, STD_ERROR_HANDLE},
             Diagnostics::Debug::{
                 MiniDumpWithIndirectlyReferencedMemory, MiniDumpWithThreadInfo,
                 MiniDumpWithUnloadedModules, MiniDumpWriteDump, SetUnhandledExceptionFilter,
@@ -24,12 +25,17 @@ use windows::{
                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             },
             SystemInformation::GetLocalTime,
-            Threading::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId},
+            Threading::{
+                GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
+                SetThreadStackGuarantee,
+            },
         },
     },
 };
 
 const KEPT_FILES: usize = 40;
+const KEPT_LOGS: usize = 20;
+const STACK_GUARANTEE: u32 = 64 * 1024;
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
 struct Reporter {
@@ -42,21 +48,22 @@ static REPORTER: OnceLock<Reporter> = OnceLock::new();
 static NATIVE_REPORTING: AtomicBool = AtomicBool::new(false);
 
 pub fn install() {
-    let Some(dir) = std::env::var_os("LOCALAPPDATA")
-        .map(|root| PathBuf::from(root).join("Navi").join("crashes"))
+    let Some(root) = std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Navi"))
     else {
         return;
     };
-    if let Err(error) = fs::create_dir_all(&dir) {
-        eprintln!("crash reports disabled: {error}");
-        return;
-    }
-    prune(&dir);
     let executable = std::env::current_exe().unwrap_or_default();
     let process = executable
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "navi".to_owned());
+    redirect_stderr(&root.join("logs"), &process);
+    let dir = root.join("crashes");
+    if let Err(error) = fs::create_dir_all(&dir) {
+        eprintln!("crash reports disabled: {error}");
+        return;
+    }
+    prune(&dir, KEPT_FILES);
     let reporter = Reporter {
         dir,
         process,
@@ -72,44 +79,73 @@ pub fn install() {
     }));
     unsafe {
         SetUnhandledExceptionFilter(Some(on_unhandled_exception));
+        let mut guarantee = STACK_GUARANTEE;
+        let _ = SetThreadStackGuarantee(&mut guarantee);
     }
 }
 
-fn prune(dir: &Path) {
+fn redirect_stderr(dir: &Path, process: &str) {
+    let attached = unsafe { GetStdHandle(STD_ERROR_HANDLE) }
+        .is_ok_and(|handle| !handle.is_invalid());
+    if attached || fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    prune(dir, KEPT_LOGS);
+    let Ok(file) = fs::File::create(dir.join(format!("{}.log", process_stamp(process)))) else {
+        return;
+    };
+    let handle = HANDLE(file.into_raw_handle());
+    unsafe {
+        let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+    }
+}
+
+fn prune(dir: &Path, kept: usize) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut files: Vec<_> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok()?;
-            metadata
-                .is_file()
-                .then(|| (metadata.modified().ok(), entry.path()))
-        })
-        .collect();
-    if files.len() <= KEPT_FILES {
+    let mut files = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        if metadata.len() == 0 {
+            let _ = fs::remove_file(entry.path());
+            continue;
+        }
+        files.push((metadata.modified().ok(), entry.path()));
+    }
+    if files.len() <= kept {
         return;
     }
     files.sort_by(|a, b| b.0.cmp(&a.0));
-    for (_, path) in files.into_iter().skip(KEPT_FILES) {
+    for (_, path) in files.into_iter().skip(kept) {
         let _ = fs::remove_file(path);
     }
 }
 
-fn report_base(reporter: &Reporter) -> PathBuf {
+fn process_stamp(process: &str) -> String {
     let time = unsafe { GetLocalTime() };
-    let (pid, tid) = unsafe { (GetCurrentProcessId(), GetCurrentThreadId()) };
-    reporter.dir.join(format!(
-        "{}-{:04}{:02}{:02}-{:02}{:02}{:02}-{pid}-{tid}",
-        reporter.process,
+    format!(
+        "{process}-{:04}{:02}{:02}-{:02}{:02}{:02}-{}",
         time.wYear,
         time.wMonth,
         time.wDay,
         time.wHour,
         time.wMinute,
-        time.wSecond
-    ))
+        time.wSecond,
+        unsafe { GetCurrentProcessId() }
+    )
+}
+
+fn report_base(reporter: &Reporter) -> PathBuf {
+    let tid = unsafe { GetCurrentThreadId() };
+    reporter
+        .dir
+        .join(format!("{}-{tid}", process_stamp(&reporter.process)))
 }
 
 fn header(reporter: &Reporter, kind: &str) -> String {
@@ -129,22 +165,35 @@ fn header(reporter: &Reporter, kind: &str) -> String {
     )
 }
 
+pub fn report_fatal(message: &str) {
+    write_thread_report("fatal error", &format!("message: {message}\n"));
+}
+
 fn write_panic_report(info: &PanicHookInfo) {
+    let location = info
+        .location()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    write_thread_report(
+        "panic",
+        &format!(
+            "message: {}\nlocation: {location}\n",
+            info.payload_as_str().unwrap_or("<non-string payload>")
+        ),
+    );
+}
+
+fn write_thread_report(kind: &str, details: &str) {
     let Some(reporter) = REPORTER.get() else {
         return;
     };
     let base = report_base(reporter);
     let thread = std::thread::current();
-    let location = info
-        .location()
-        .map(ToString::to_string)
-        .unwrap_or_default();
     let text = format!(
-        "{}thread: {} ({})\nmessage: {}\nlocation: {location}\n\n{}\n",
-        header(reporter, "panic"),
+        "{}thread: {} ({})\n{details}\n{}\n",
+        header(reporter, kind),
         thread.name().unwrap_or("<unnamed>"),
         unsafe { GetCurrentThreadId() },
-        info.payload_as_str().unwrap_or("<non-string payload>"),
         std::backtrace::Backtrace::force_capture()
     );
     let _ = fs::write(base.with_extension("txt"), text);
