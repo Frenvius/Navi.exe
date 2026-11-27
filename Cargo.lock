@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "navi"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "notify",
  "serde",
