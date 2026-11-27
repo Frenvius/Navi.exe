@@ -12,6 +12,7 @@ use super::{com_init, ops, Pidl};
 
 const CLSID_NEW_MENU: GUID = GUID::from_u128(0xD969A300_E7FF_11D0_A93B_00A0C90F2719);
 const FIRST_ID: u32 = 1;
+const LAST_ID: u32 = 0x7FFF;
 
 #[derive(Clone)]
 pub struct NewEntry {
@@ -57,7 +58,7 @@ unsafe fn build(hwnd: HWND, folder: &str) -> Result<Menu, String> {
         .Initialize(Some(pidl.ptr()), None, Default::default())
         .map_err(|e| e.message())?;
     let menu = CreatePopupMenu().map_err(|e| e.message())?;
-    let _ = cm.QueryContextMenu(menu, 0, FIRST_ID, 0x7FFF, CMF_NORMAL);
+    let _ = cm.QueryContextMenu(menu, 0, FIRST_ID, LAST_ID, CMF_NORMAL);
     let popup = GetSubMenu(menu, 0);
     if popup.is_invalid() {
         let _ = DestroyMenu(menu);
@@ -71,6 +72,9 @@ unsafe fn build(hwnd: HWND, folder: &str) -> Result<Menu, String> {
 }
 
 unsafe fn verb_of(cm: &IContextMenu, id: u32) -> String {
+    if !(FIRST_ID..=LAST_ID).contains(&id) {
+        return String::new();
+    }
     let mut buf = [0u16; 256];
     let ok = cm.GetCommandString(
         (id - FIRST_ID) as usize,
